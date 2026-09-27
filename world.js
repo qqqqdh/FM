@@ -147,10 +147,81 @@
     TR: { 2: [18, 18] }
   };
 
+  // Explicit representative positions; sources and scope: DATA-AUDIT.md.
+  // Keep order stable: seed IDs in existing careers depend on club and index.
   const rosters = {
-    '선덜랜드': ['Kevin Danso', 'Dan Ballard', 'Dayann Methalie', 'Chemsdine Talbi', 'Alan Browne', 'Brian Brobbey', 'Nilson Angulo', 'Chris Rigg', 'Thomas Meunier', "Luke O'Nien", 'Romaine Mundle', 'Omar Alderete', 'Reinildo Mandava', 'Wilson Isidor', 'Habib Diarra', 'Nordi Mukiele', 'Simon Moore', 'Robin Roefs', 'Noah Sadiki', 'Enzo Le Fee', 'Jules Ahoka', 'Granit Xhaka'],
-    '레스터 시티': ['Jakub Stolarczyk', 'Jayden Joseph', 'Wout Faes', 'Ben Nelson', 'Caleb Okoli', 'Wes Burns', 'Conor Chaplin', 'Admir Bristrić', 'Stephy Mavididi', 'Liam Cullen', 'Bobby De Cordova-Reid', 'Harry Souttar', 'Hamza Choudhury', 'Christian McFarlane', 'Harry Howell', 'Franco Ravizzoli', 'Oliver Skipp', 'Tommy Watson', 'Louis Page', 'Woyo Coulibaly', 'Alex McCarthy', 'Luke Thomas'],
-    'FC 안양': ['강지완', '강지훈', '권경원', '김강', '김다솔', '김동진', '김보경', '김성동', '김영찬', '김운', '김재현', '김정현', '김정훈', '김지훈', '대니 바커', '마테우스', '문성우', '박정훈', '박종현', '블레이즈', '아일톤', '엘쿠라노']
+    '선덜랜드': [
+      ["Kevin Danso", 'CB'],
+      ["Dan Ballard", 'CB'],
+      ["Dayann Methalie", 'LB'],
+      ["Chemsdine Talbi", 'RW'],
+      ["Alan Browne", 'CM'],
+      ["Brian Brobbey", 'ST'],
+      ["Nilson Angulo", 'LW'],
+      ["Chris Rigg", 'AM'],
+      ["Thomas Meunier", 'RB'],
+      ["Luke O'Nien", 'CB'],
+      ["Romaine Mundle", 'LW'],
+      ["Omar Alderete", 'CB'],
+      ["Reinildo Mandava", 'LB'],
+      ["Wilson Isidor", 'ST'],
+      ["Habib Diarra", 'CM'],
+      ["Nordi Mukiele", 'RB'],
+      ["Simon Moore", 'GK'],
+      ["Robin Roefs", 'GK'],
+      ["Noah Sadiki", 'DM'],
+      ["Enzo Le Fee", 'CM'],
+      ["Jules Ahoka", 'DM'],
+      ["Granit Xhaka", 'DM']
+    ],
+    '레스터 시티': [
+      ["Jakub Stolarczyk", 'GK'],
+      ["Jayden Joseph", 'RB'],
+      ["Wout Faes", 'CB'],
+      ["Ben Nelson", 'CB'],
+      ["Caleb Okoli", 'CB'],
+      ["Wes Burns", 'RW'],
+      ["Conor Chaplin", 'AM'],
+      ["Admir Bristrić", 'ST'],
+      ["Stephy Mavididi", 'LW'],
+      ["Liam Cullen", 'ST'],
+      ["Bobby De Cordova-Reid", 'LW'],
+      ["Harry Souttar", 'CB'],
+      ["Hamza Choudhury", 'DM'],
+      ["Christian McFarlane", 'LB'],
+      ["Harry Howell", 'AM'],
+      ["Franco Ravizzoli", 'GK'],
+      ["Oliver Skipp", 'DM'],
+      ["Tommy Watson", 'LW'],
+      ["Louis Page", 'CM'],
+      ["Woyo Coulibaly", 'RB'],
+      ["Alex McCarthy", 'GK'],
+      ["Luke Thomas", 'LB']
+    ],
+    'FC 안양': [
+      ["강지완", 'DM'],
+      ["강지훈", 'RB'],
+      ["권경원", 'CB'],
+      ["김강", 'RW'],
+      ["김다솔", 'GK'],
+      ["김동진", 'LB'],
+      ["김보경", 'AM'],
+      ["김성동", 'GK'],
+      ["김영찬", 'CB'],
+      ["김운", 'ST'],
+      ["김재현", 'LB'],
+      ["김정현", 'DM'],
+      ["김정훈", 'GK'],
+      ["김지훈", 'CB'],
+      ["대니 바커", 'CB'],
+      ["마테우스", 'AM'],
+      ["문성우", 'CM'],
+      ["박정훈", 'ST'],
+      ["박종현", 'CB'],
+      ["블레이즈", 'ST'],
+      ["아일톤", 'LW'],
+      ["엘쿠라노", 'ST']
+    ]
   };
 
   const seen = new Set();

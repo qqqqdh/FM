@@ -75,6 +75,7 @@
   const DETAILS = { finishing: '골 결정력', passing: '패스', vision: '시야', dribbling: '드리블', crossing: '크로스', tackling: '태클', marking: '마킹', positioning: '위치 선정', acceleration: '가속력', stamina: '지구력', strength: '몸싸움', heading: '헤더', reflexes: '반사신경', handling: '볼 처리' };
   const POSITIONS = { GK: '골키퍼', CB: '센터백', LB: '왼쪽 풀백', RB: '오른쪽 풀백', DM: '수비형 미드필더', CM: '중앙 미드필더', AM: '공격형 미드필더', LW: '왼쪽 윙어', RW: '오른쪽 윙어', ST: '스트라이커' };
   const POSITION_GROUPS = { GK:['GK'], DF:['LB','CB','CB','RB'], MF:['DM','CM','AM','CM'], FW:['LW','ST','RW','ST'] };
+  const positionGroup = position => Object.keys(POSITION_GROUPS).find(group => POSITION_GROUPS[group].includes(position));
   const SLOTS = {
     '4-3-3': ['GK','LB','CB','CB','RB','DM','CM','CM','LW','ST','RW'],
     '4-4-2': ['GK','LB','CB','CB','RB','LW','CM','CM','RW','ST','ST'],
@@ -97,6 +98,16 @@
     return p;
   }
   function upgradeSave(s) {
+    s.players.forEach(p => {
+      // Seed IDs survive transfers, loans and promotion/relegation. Names alone can collide with youth players.
+      const origin = s.clubs[Math.floor((p.id - 1) / 22)];
+      const seed = ROSTERS[origin?.name]?.[(p.id - 1) % 22];
+      if (seed && p.name === seed[0]) { p.position = seed[1]; p.pos = positionGroup(p.position); }
+      if (p.pos !== 'GK') {
+        if (p.leagueStats) p.leagueStats.cleanSheets = 0;
+        p.history?.forEach(h => { if (h.cleanSheets !== undefined) h.cleanSheets = 0; });
+      }
+    });
     [...s.players, ...s.academy].forEach(detail);
     s.instructions = Array.from({length:11}, (_,i) => ({...defaultInstruction(),...s.instructions?.[i]}));
     s.tacticPlans ||= [null,null,null];
@@ -181,9 +192,11 @@
       const originLeague = LEAGUES[s.clubs[c].origin], originPosition = originLeague.teams.indexOf(s.clubs[c].name);
       const base = 62 + Math.floor(rng(s) * 16) + (originPosition < Math.min(4, originLeague.teams.length) ? 4 : 0) - (s.leagues[s.clubs[c].league].tier - 1) * 8;
       const stat = bonus => clamp(base + Math.floor(rng(s) * 12) - 5 + bonus, 40, 92);
-      const rosterNames = ROSTERS[s.clubs[c].name];
+      const seedPlayer = ROSTERS[s.clubs[c].name]?.[i];
+      if (seedPlayer) pos = positionGroup(seedPlayer[1]);
       const generatedName = randomName(s, originLeague.flag);
-      const p = { id: c * 22 + i + 1, name: rosterNames?.[i] || generatedName, club: c, pos, age: 19 + Math.floor(rng(s) * 15), atk: stat(pos === 'FW' ? 5 : -5), def: stat(pos === 'DF' || pos === 'GK' ? 6 : -6), tech: stat(pos === 'MF' ? 6 : 0), pace: stat(2), fitness: 93 + Math.floor(rng(s) * 8), morale: 75, injury: 0, banned: 0, yellows: 0, goals: 0, appearances: 0, potential: Math.min(95, base + 10 + Math.floor(rng(s) * 9)), contract: 2027 + Math.floor(rng(s) * 3), promised: 'rotation', loan: null };
+      const p = { id: c * 22 + i + 1, name: seedPlayer?.[0] || generatedName, club: c, pos, age: 19 + Math.floor(rng(s) * 15), atk: stat(pos === 'FW' ? 5 : -5), def: stat(pos === 'DF' || pos === 'GK' ? 6 : -6), tech: stat(pos === 'MF' ? 6 : 0), pace: stat(2), fitness: 93 + Math.floor(rng(s) * 8), morale: 75, injury: 0, banned: 0, yellows: 0, goals: 0, appearances: 0, potential: Math.min(95, base + 10 + Math.floor(rng(s) * 9)), contract: 2027 + Math.floor(rng(s) * 3), promised: 'rotation', loan: null };
+      if (seedPlayer) p.position = seedPlayer[1];
       p.salary = round(ovr(p) * .002); s.players.push(p);
     });
     s.clubs.forEach(c => { c.lineup = autoLineup(s, c.id); });
@@ -483,7 +496,7 @@
       const p=player(s,id); if(!p||!record.minutes)continue;
       const stats=p.leagueStats ||= emptyLeagueStats(); stats.matches++;
       for(const key of ['starts','minutes','goals','assists','shots','onTarget'])stats[key]+=record[key]||0;
-      if((p.club===m.h?m.ag:m.hg)===0&&record.minutes>=60)stats.cleanSheets++;
+      if(p.pos==='GK'&&(p.club===m.h?m.ag:m.hg)===0&&record.minutes>=60)stats.cleanSheets++;
     }
     m.events.filter(e => e.kind === 'goal').forEach(e => { player(s, e.player).goals++; });
     [[m.h, m.hg, m.ag], [m.a, m.ag, m.hg]].forEach(([cid, gf, ga]) => {
