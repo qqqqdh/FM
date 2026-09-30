@@ -14,6 +14,9 @@
   };
   const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
   const round = n => Math.round(n * 100) / 100;
+  const MAX_OVR = 110;
+  const upgradeLimit = (group, key) => group === 'facilities' && key === 'youth' ? 8 : 5;
+  const clubFacilities = (s, club = 0) => club === 0 ? s.facilities : (s.clubs[club].facilities ||= { training: 6 - s.leagues[s.clubs[club].league].tier, youth: 4 - s.leagues[s.clubs[club].league].tier, recovery: 0, stadium: 0 });
   function rng(s) {
     s.seed = (Math.imul(s.seed, 1664525) + 1013904223) >>> 0;
     return s.seed / 4294967296;
@@ -56,7 +59,7 @@
   const indexes = new WeakMap();
   function player(s, id) {
     let index = indexes.get(s);
-    if (!index || index.size !== s.players.length) { index = new Map(s.players.map(p => [p.id, p])); indexes.set(s, index); }
+    if (!index || index.size !== s.players.length + (s.retiredPlayers?.length || 0)) { index = new Map([...(s.retiredPlayers || []), ...s.players].map(p => [p.id, p])); indexes.set(s, index); }
     return index.get(Number(id));
   }
   function singleRoundRobin(ids) {
@@ -119,7 +122,7 @@
   function detail(p) {
     if (!p.attributes) {
       const bases = [p.atk,p.tech,p.tech,p.tech,p.tech,p.def,p.def,p.def,p.pace,(p.pace+p.def)/2,(p.atk+p.def)/2,p.atk,p.def,p.def];
-      p.attributes = Object.fromEntries(Object.keys(DETAILS).map((k, i) => [k, clamp(Math.round(bases[i] + ((p.id * 7 + i * 11) % 17) - 8), 1, 99)]));
+      p.attributes = Object.fromEntries(Object.keys(DETAILS).map((k, i) => [k, clamp(Math.round(bases[i] + ((p.id * 7 + i * 11) % 17) - 8), 1, MAX_OVR)]));
     }
     p.position ||= POSITION_GROUPS[p.pos][p.id % POSITION_GROUPS[p.pos].length];
     p.foot ||= p.id % 10 < 3 ? 'left' : p.id % 10 === 3 ? 'both' : 'right';
@@ -127,6 +130,7 @@
     return p;
   }
   function upgradeSave(s) {
+    s.clubs.slice(1).forEach(c => clubFacilities(s, c.id));
     s.summerWeek ??= 0;
     s.academy.forEach(p => { p.joinedClub ??= 0; p.joinedAt ??= marketTick(s); });
     s.facilities.recovery ??= 0;
@@ -162,8 +166,9 @@
     s.tacticPlans ||= [null,null,null];
     s.transferList ||= [];
     s.players.forEach(p => { p.transferListed ??= s.transferList.includes(p.id); p.history ||= []; });
-    s.incoming=s.incoming.filter(o=>{const p=player(s,o.player),club=s.clubs[o.club];return p&&club&&club.id>0&&transferTerms(s,p,club,o.cash).ok;});
     if (s.pending) s.pending.minute ??= 45;
+    if (s.season > 2026 && !s.pending) worldYouthIntake(s);
+    s.incoming=s.incoming.filter(o=>{const p=player(s,o.player),club=s.clubs[o.club];return p&&club&&club.id>0&&transferTerms(s,p,club,o.cash).ok;});
     return s;
   }
   function suitability(p, slot) {
@@ -174,10 +179,10 @@
     return group(position) === group(slot) ? .88 : .68;
   }
   function lineupScore(p, slot) { return ovr(p) * (.35 + p.fitness / 100 * .65) * suitability(p, slot) + detail(p).attributes.stamina * .06; }
-  function autoLineup(s, club = 0) {
-    let pool = roster(s, club).filter(available);
-    if (pool.length < 11) pool = roster(s, club).slice();
-    return SLOTS[s.clubs[club].tactics.formation].map(pos => {
+  function autoLineup(s, club = 0, formation = s.clubs[club].tactics.formation, squad = roster(s, club)) {
+    let pool = squad.filter(available);
+    if (pool.length < 11) pool = squad.slice();
+    return SLOTS[formation].map(pos => {
       pool.sort((a, b) => lineupScore(b,pos) - lineupScore(a,pos));
       return pool.shift().id;
     });
@@ -245,11 +250,11 @@
       const seedPlayer = ROSTERS[s.clubs[c].name]?.[i];
       if (seedPlayer) pos = positionGroup(seedPlayer[1]);
       const generatedName = randomName(s, originLeague.flag);
-      const p = { id: c * 22 + i + 1, name: seedPlayer?.[0] || generatedName, club: c, pos, age: 19 + Math.floor(rng(s) * 15), atk: stat(pos === 'FW' ? 5 : -5), def: stat(pos === 'DF' || pos === 'GK' ? 6 : -6), tech: stat(pos === 'MF' ? 6 : 0), pace: stat(2), fitness: 93 + Math.floor(rng(s) * 8), morale: 75, injury: 0, banned: 0, yellows: 0, goals: 0, appearances: 0, potential: Math.min(95, base + 10 + Math.floor(rng(s) * 9)), contract: 2027 + Math.floor(rng(s) * 3), promised: 'rotation', loan: null };
+      const p = { id: c * 22 + i + 1, name: seedPlayer?.[0] || generatedName, club: c, pos, age: 19 + Math.floor(rng(s) * 15), atk: stat(pos === 'FW' ? 5 : -5), def: stat(pos === 'DF' || pos === 'GK' ? 6 : -6), tech: stat(pos === 'MF' ? 6 : 0), pace: stat(2), fitness: 93 + Math.floor(rng(s) * 8), morale: 75, injury: 0, banned: 0, yellows: 0, goals: 0, appearances: 0, potential: Math.min(MAX_OVR, base + 10 + Math.floor(rng(s) * 9)), contract: 2027 + Math.floor(rng(s) * 3), promised: 'rotation', loan: null };
       if (seedPlayer) p.position = seedPlayer[1];
       p.salary = marketWage(p); s.players.push(p);
     });
-    s.clubs.forEach(c => { c.lineup = autoLineup(s, c.id); });
+    fixLineups(s);
     s.captain = s.clubs[0].lineup[1];
     s.news.push({ title: '당신의 철학으로, 새로운 시즌을.', text: `${s.clubs[0].name}의 감독으로 부임했습니다. ${s.leagues.length}개 리그, ${s.clubs.length}개 구단이 기다립니다. 이사회 목표는 ${s.target}위 이내입니다.`, type: 'club', week: 0 });
     youthIntake(s); initCompetitions(s);
@@ -260,11 +265,20 @@
   function nextFixture(s) { return s.fixtures[s.week]?.find(m => m.includes(0)); }
   function canRelease(s, id) {
     const p = player(s, id);
-    return p && !p.loan && (p.club === -1 || (roster(s, p.club).length > 16 && roster(s, p.club).filter(x => x.pos === p.pos && available(x)).length > (p.pos === 'GK' ? 1 : 3)));
+    return p && !p.retired && !p.loan && (p.club === -1 || (roster(s, p.club).length > 16 && roster(s, p.club).filter(x => x.pos === p.pos && available(x)).length > (p.pos === 'GK' ? 1 : 3)));
   }
   function fixLineups(s) {
+    const squads = s.clubs.map(() => []);
+    s.players.forEach(p => { if (p.club >= 0) squads[p.club].push(p); });
     s.clubs.forEach(c => {
-      if (c.id !== 0 || c.lineup.length !== 11 || c.lineup.some(id => player(s, id)?.club !== c.id || !available(player(s, id)))) c.lineup = autoLineup(s, c.id);
+      if (c.id !== 0) {
+        let best = -Infinity;
+        for (const formation of [c.tactics.formation, ...Object.keys(SLOTS).filter(f => f !== c.tactics.formation)]) {
+          const lineup = autoLineup(s, c.id, formation, squads[c.id]);
+          const score = lineup.reduce((sum,id,i) => sum + lineupScore(player(s,id), SLOTS[formation][i]), 0);
+          if (score > best) { best = score; c.tactics.formation = formation; c.lineup = lineup; }
+        }
+      } else if (c.lineup.length !== 11 || c.lineup.some(id => player(s, id)?.club !== c.id || !available(player(s, id)))) c.lineup = autoLineup(s, c.id, c.tactics.formation, squads[c.id]);
     });
   }
   function setTactics(s, field, v) {
@@ -311,7 +325,7 @@
     if (s.pending) return { ok: false, message: '진행 중인 경기를 먼저 마쳐 주세요.' };
     const p = player(s, id), swap = swapId ? player(s, swapId) : null;
     if (!windowOpen(s) && p?.club !== -1) return { ok: false, message: transferWindowLabel(s) };
-    if (!p || p.club === 0 || p.loan || !Number.isFinite(cash) || cash < 0 || (swapId && (!swap || swap.club !== 0 || swap.loan))) return { ok: false, message: '제안 조건을 확인해 주세요. 임대 중인 선수는 합의된 옵션으로만 완전이적할 수 있습니다.' };
+    if (!p || p.retired || p.club === 0 || p.loan || !Number.isFinite(cash) || cash < 0 || (swapId && (!swap || swap.club !== 0 || swap.loan))) return { ok: false, message: '제안 조건을 확인해 주세요. 임대 중이거나 은퇴한 선수인지 확인하세요.' };
     if (optionPrice !== null && (!loan || !Number.isFinite(optionPrice) || optionPrice <= 0)) return {ok:false,message:'임대 완전이적 옵션 금액을 확인하세요.'};
     if (cash > s.budget) return { ok: false, message: '이적 예산이 부족합니다.' };
     if ((loan && (swap || p.club === -1)) || (swap && p.club === -1)) return { ok: false, message: '임대 및 자유 계약에는 선수 교환을 사용할 수 없습니다.' };
@@ -491,6 +505,9 @@
       const attackIntent=1+advance*.28+(takeOn?(d.dribbling-50)/450:0);
       const defenseIntent=1-advance*.12-highLine*.22+(instruction?.marking==='cover'?.06:instruction?.marking==='tight'?(d.marking-60)/500:0);
       const controlIntent=1+highLine*.12+(safe?.04:takeOn?-.05:0);
+      const slot = SLOTS[t.formation][i];
+      if (slot === 'AM') attack += (d.vision + d.passing) * .1 * fit * match;
+      if (slot === 'DM') defense += (d.tackling + d.positioning) * .1 * fit * match;
       attack += attackIntent * (p.atk*.25 + d.finishing*.25 + d.dribbling*.15 + d.acceleration*.2 + d.heading*.15) * fit * match * (slots[i] === 'FW' ? 1.6 : slots[i] === 'GK' ? .1 : .8) * (role === 'attack' ? 1.17 : role === 'defend' ? .88 : 1) * (forward ? 1.12 : instruction?.runs === 'hold' ? .92 : 1) * (direct ? 1.04 : 1) * (instruction?.movement === 'overlap' ? 1+d.crossing/1200 : instruction?.movement === 'channel' ? 1+d.positioning/1200 : 1);
       defense += defenseIntent * (p.def*.3 + (slots[i] === 'GK' ? d.reflexes*.4+d.handling*.3 : d.tackling*.25+d.marking*.2+d.positioning*.15+d.strength*.1)) * fit * match * (slots[i] === 'GK' ? 1.8 : slots[i] === 'DF' ? 1.3 : .6) * (role === 'defend' ? 1.15 : role === 'attack' ? .85 : 1) * (forward ? .9 : 1) * (inverted ? 1.04 : ['channel','roam'].includes(instruction?.movement) ? .96 : 1);
       control += controlIntent * (p.tech*.25+d.passing*.4+d.vision*.35) * fit * match * (slots[i] === 'MF' ? 1.5 : .65) * (inverted ? 1.15 : instruction?.movement === 'roam' ? 1+d.vision/1400 : 1) * (direct ? .93 : instruction?.passing === 'short' ? 1.06 : 1) * (instruction?.pressing === 'intense' ? 1.06 : instruction?.pressing === 'contain' ? .97 : 1);
@@ -661,7 +678,8 @@
         if (s.training === 'rest') { p.fitness = clamp(p.fitness + 10, 0, 100); p.morale = clamp(p.morale + 2, 0, 100); return; }
         p.fitness = clamp(p.fitness - s.intensity * 2 + (s.training === 'fitness' ? 4 : 0), 35, 100);
       }
-      const level = own ? s.facilities.training : 6 - s.leagues[s.clubs[p.club].league].tier;
+      const facilities = clubFacilities(s, p.club), level = facilities.training;
+      if (!own) p.fitness = clamp(p.fitness + facilities.recovery, 35, 100);
       const chance = (.04 + (own ? s.staff.coach : level) * .012 + level * .015 + (own ? s.intensity : 1) * .025) * (p.age <= 23 ? 1 : p.age <= 29 ? .7 : .25) * (ovr(p) >= 80 ? .6 : 1);
       if (ovr(p) < p.potential && rng(s) < chance) {
         const stat = own && focus || ['atk', 'def', 'tech', 'pace'][Math.floor(rng(s) * 4)];
@@ -672,18 +690,24 @@
   }
   function develop(p, stat, amount) {
     const before = p[stat];
-    p[stat] = clamp(before + amount, 40, 95);
+    p[stat] = clamp(before + amount, 40, MAX_OVR);
     const keys = { atk: ['finishing', 'heading'], def: ['tackling', 'marking', 'positioning', 'reflexes', 'handling'], tech: ['passing', 'vision', 'dribbling', 'crossing'], pace: ['acceleration', 'stamina'] }[stat];
-    if (p.attributes) keys.forEach(k => { p.attributes[k] = clamp(p.attributes[k] + p[stat] - before, 1, 99); });
+    if (p.attributes) keys.forEach(k => { p.attributes[k] = clamp(p.attributes[k] + p[stat] - before, 1, MAX_OVR); });
   }
   function aiTransfers(s) {
     if (windowOpen(s)) for (let i = 0; i < Math.ceil(s.clubs.length / 40); i++) {
       const buyer = 1 + Math.floor(rng(s) * (s.clubs.length - 1)), seller = 1 + Math.floor(rng(s) * (s.clubs.length - 1));
-      if (buyer === seller || roster(s, buyer).length >= 25) continue;
-      const squad = roster(s, buyer), tier = s.leagues[s.clubs[buyer].league].tier;
-      const candidates = roster(s, seller).filter(p => p.age <= 28 && canRelease(s, p.id) && !s.clubs[seller].lineup.includes(p.id) && ovr(p) <= 86 - (tier - 1) * 8 && ovr(p) > Math.min(...squad.filter(q => q.pos === p.pos).map(ovr)) + 2);
+      if (buyer === seller) continue;
+      const squad = roster(s, buyer);
+      const candidates = roster(s, seller).filter(p => p.age <= 28 && canRelease(s, p.id) && ovr(p) > Math.min(...squad.filter(q => q.pos === p.pos).map(ovr)) + 2);
       const p = candidates.sort((a, b) => ovr(b) - ovr(a))[0];
-      if (p) { const terms=transferTerms(s,p,s.clubs[buyer],value(p),squad);if(!terms.ok)continue;spendTransferBudget(s,buyer,value(p));p.salary = terms.salary; movePlayer(s, p, buyer); s.transfers.unshift({ text: `[세계 이적] ${p.name}: ${s.clubs[seller].name} → ${s.clubs[buyer].name} · ${value(p)}억`, season: s.season, week: s.week }); }
+      if (p) {
+        const outgoing = squad.length >= 25 ? squad.filter(q => q.pos === p.pos && ovr(q) + 2 < ovr(p) && canRelease(s, q.id)).sort((a,b) => ovr(a)-ovr(b))[0] : null;
+        const terms=transferTerms(s,p,s.clubs[buyer],value(p),squad.filter(q => q !== outgoing));
+        if(!terms.ok)continue;
+        if (outgoing) movePlayer(s, outgoing, -1);
+        spendTransferBudget(s,buyer,value(p));p.salary = terms.salary; movePlayer(s, p, buyer); s.transfers.unshift({ text: `[세계 이적] ${p.name}: ${s.clubs[seller].name} → ${s.clubs[buyer].name} · ${value(p)}억`, season: s.season, week: s.week });
+      }
     }
     aiContractMarket(s);
   }
@@ -693,8 +717,8 @@
     const scale=['EN','ES','DE','IT','FR','SA'].includes(league.flag)?1:['PT','NL','BR'].includes(league.flag)?.65:['KR','JP','CN','AE','QA'].includes(league.flag)?.35:.15;
     const origin=LEAGUES[club.origin], rank=Math.max(0,origin.teams.indexOf(club.name));
     const size=1-.5*rank/Math.max(1,origin.teams.length-1);
-    const total=Math.round(1800*scale*size/tier**3);
-    return {budget:Math.max(0,total-(club.marketSpending?.season===s.season?club.marketSpending.amount:0)),wage:round(Math.max(.12,1.6*Math.sqrt(scale)*size/tier**1.4)),rating:99-(tier-1)*10-(scale<.3?16:scale<.6?7:scale<.9?3:0)};
+    const total=Math.round(1800*scale*size/tier**3 + (club.facilities?.stadium || 0) * 1.25 * s.totalWeeks / 2);
+    return {budget:Math.max(0,total-(club.marketSpending?.season===s.season?club.marketSpending.amount:0)),wage:round(Math.max(.12,1.6*Math.sqrt(scale)*size/tier**1.4)),rating:MAX_OVR-(tier-1)*10-(scale<.3?16:scale<.6?7:scale<.9?3:0)};
   }
   function spendTransferBudget(s, cid, amount) {
     const club=s.clubs[cid];
@@ -719,8 +743,10 @@
     if (rating < 66 - (tier - 1) * 8 || p.injury > 8) return null;
     const position=detail(p).position;
     const peers = squad.filter(q => detail(q).position === position).sort((a,b) => ovr(b)-ovr(a));
-    const starters = SLOTS[club.tactics.formation].filter(pos => pos === position).length;
-    if(!starters)return null;
+    const currentSlots = SLOTS[club.tactics.formation].filter(pos => pos === position).length;
+    // AM/DM signings may justify a formation change; reject weak speculative purchases.
+    if (!currentSlots && (!['AM','DM'].includes(position) || rating < Math.max(66-(tier-1)*8, ...squad.filter(q => q.pos === 'MF').map(ovr)))) return null;
+    const starters = currentSlots || 1;
     const target = peers.length ? ovr(peers[Math.min(Math.max(0,starters-1),peers.length-1)]) : 45;
     if (peers.length >= starters + 1 && rating < (ovr(peers[0]) + 2)) return null;
     if (rating < target - 1 && !(p.age <= 23 && p.potential > target + 4 && rating >= target - 6)) return null;
@@ -801,7 +827,7 @@
     if (s.pending || !summerOpen(s)) return {ok:false,message:'시즌 종료 후 최대 4주 동안 여름 시장을 진행할 수 있습니다.'};
     aiTransfers(s); s.summerWeek = (s.summerWeek || 0) + 1;
     const cost = round(weeklyWages(s) + facilityUpkeep(s));
-    transact(s,-cost,`여름 시장 ${s.summerWeek}주차 주급·시설 운영비`);
+    transact(s,-cost,`여름 시장 ${s.summerWeek}주차 주급`);
     fixLineups(s); makeOffer(s); s.news=s.news.slice(0,30);
     return {ok:true,message:`여름 시장 ${s.summerWeek}/4주 진행 · 운영비 ${cost.toFixed(2)}억 · 이적 소식과 계약 제안을 확인하세요.`};
   }
@@ -827,7 +853,6 @@
     const featured = mine || { h: 0, a: 0, hg: 0, ag: 0, homeXg: 0, awayXg: 0, possession: 50, shots: [0, 0], events: [], week: s.week, season: s.season, rest: true };
     const revenue = weeklyIncome(s, mine?.h === 0), salary = weeklyWages(s), upkeep = facilityUpkeep(s), net = round(revenue - salary - upkeep);
     transact(s, revenue, mine?.h === 0 ? '홈 경기 수입 + 방송권·스폰서' : '방송권 + 스폰서'); transact(s, -salary, '선수 및 스태프 주급');
-    transact(s, -upkeep, '시설 주간 운영비');
     results.forEach(m => { if (m.h !== 0 && m.a !== 0) { m.events = []; delete m.playerStats; delete m.lastAction; } });
     s.results.push(...results); s.lastMatch = featured; s.week++;
     processCups(s);
@@ -909,7 +934,7 @@
     }
     s.news.unshift({ title: `${s.season} 시즌 개막`, text: `이적시장 재개장 · 지원금 ${grant}억 원 · 성장, 노화, 계약 만료, 임대 복귀 반영`, type: 'club', week: 0 });
     youthIntake(s); s.fixtures = schedule(s.clubs, s.leagues); s.totalWeeks = s.fixtures.length; initCompetitions(s, qualification);
-    aiContractMarket(s); fixLineups(s); makeOffer(s); return true;
+    manageAIFacilities(s); worldYouthIntake(s); aiContractMarket(s); fixLineups(s); makeOffer(s); return true;
   }
   function shuffle(s, xs) {
     const a = xs.slice();
@@ -1136,17 +1161,52 @@
       s.clubs.forEach(c => { if (c.league === 0) c.league = myLeague; else if (c.league === myLeague) c.league = 0; });
     }
   }
-  function youngPlayer(s, pos, index = 0, existingNames = []) {
-    const base = 48 + s.facilities.youth * 2 + Math.floor(rng(s) * 9);
-    const id = Math.max(0, ...s.players.map(p => p.id), ...s.academy.map(p => p.id)) + 1 + index;
-    const flag = LEAGUES[s.clubs[0].origin].flag;
+  function youngPlayer(s, pos, index = 0, existingNames = [], club = 0, nextId = null, position = null) {
+    const youthLevel = clubFacilities(s, club).youth;
+    const base = 48 + youthLevel * 2 + Math.floor(rng(s) * 9);
+    const id = nextId ?? [...s.players, ...s.academy, ...(s.retiredPlayers || [])].reduce((n, p) => Math.max(n, p.id), 0) + 1 + index;
+    const flag = LEAGUES[s.clubs[club].origin].flag;
     let name = randomName(s, flag);
     let attempts = 0;
     while ((existingNames.includes(name) || s.academy.some(p => p.name === name) || s.players.some(p => p.club === 0 && p.name === name)) && attempts < 25) {
       name = randomName(s, flag);
       attempts++;
     }
-    return detail({ id, name, club: -2, joinedClub:0, joinedAt:marketTick(s), pos, age: 16 + Math.floor(rng(s) * 3), atk: base + (pos === 'FW' ? 10 : 0), def: base + (pos === 'GK' || pos === 'DF' ? 10 : 0), tech: base + (pos === 'MF' ? 10 : 0), pace: base + 5, fitness: 100, morale: 85, injury: 0, banned: 0, yellows: 0, goals: 0, appearances: 0, potential: clamp(base + 14 + Math.floor(rng(s) * 15), 60, 95), contract: s.season + 3, salary: .08, promised: 'prospect', loan: null, transferListed: false, history: [] });
+    position ||= POSITION_GROUPS[pos][id % POSITION_GROUPS[pos].length];
+    return detail({ id, name, club: club === 0 ? -2 : club, joinedClub:club, joinedAt:marketTick(s), pos, position, age: 16 + Math.floor(rng(s) * 3), atk: base + (pos === 'FW' ? 10 : 0), def: base + (pos === 'GK' || pos === 'DF' ? 10 : 0), tech: base + (pos === 'MF' ? 10 : 0), pace: base + 5, fitness: 100, morale: 85, injury: 0, banned: 0, yellows: 0, goals: 0, appearances: 0, potential: clamp(base + 14 + Math.floor(rng(s) * 15) + Math.max(0, youthLevel - 5) * 4, 60, MAX_OVR), contract: s.season + 3, salary: .08, promised: 'prospect', loan: null, transferListed: false, history: [] });
+  }
+  function worldYouthIntake(s) {
+    if (s.worldYouthSeason === s.season || s.pending) return;
+    const squads = s.clubs.map(() => []), retired = new Set();
+    s.players.forEach(p => { if (p.club >= 0) squads[p.club].push(p); });
+    let id = [...s.players, ...s.academy, ...(s.retiredPlayers || [])].reduce((n, p) => Math.max(n, p.id), 0);
+    for (const c of s.clubs.slice(1)) {
+      const squad = squads[c.id];
+      // Two intakes a year cover all ten positions in five years, independent of player IDs.
+      for (let i = 0; i < 2; i++) {
+        const position = Object.keys(POSITIONS)[(c.id * 2 + (s.season - 2026) * 2 + i) % 10];
+        const p = youngPlayer(s, positionGroup(position), 0, squad.map(q => q.name), c.id, ++id, position);
+        s.players.push(p); squad.push(p);
+      }
+      for (const p of squad.filter(p => p.age >= 35 && !p.loan).sort((a,b) => b.age-a.age)) {
+        if (squad.length <= 22 || squad.filter(q => q.pos === p.pos).length <= (p.pos === 'GK' ? 2 : 4)) continue;
+        retired.add(p.id); squad.splice(squad.indexOf(p), 1);
+      }
+      while (squad.length > 25) {
+        const p = squad.filter(p => !p.loan && squad.filter(q => q.pos === p.pos).length > (p.pos === 'GK' ? 2 : 4)).sort((a,b) => b.age-a.age || ovr(a)-ovr(b))[0];
+        if (!p) break;
+        movePlayer(s, p, -1); squad.splice(squad.indexOf(p), 1);
+      }
+    }
+    s.players.forEach(p => { if (p.club === -1 && p.age >= 35 && !p.loan) retired.add(p.id); });
+    // Keep retired identities and records so historical match references still resolve.
+    s.retiredPlayers ||= [];
+    for (const p of s.players.filter(p => retired.has(p.id))) { movePlayer(s, p, -1); p.retired = true; s.retiredPlayers.push(p); }
+    s.players = s.players.filter(p => !retired.has(p.id)); indexes.delete(s);
+    s.watch = s.watch.filter(id => !retired.has(id));
+    s.scouting = s.scouting.filter(r => !retired.has(r.player));
+    s.worldYouthSeason = s.season;
+    fixLineups(s);
   }
   function youthIntake(s) {
     const fresh = [];
@@ -1203,15 +1263,30 @@
   }
   function scout(s, id) {
     const p = player(s, id);
-    if (s.pending || !p || p.club === 0 || s.scouting.some(r => r.player === p.id) || s.budget < .5) return { ok: false, message: '이미 조사 중이거나, 예산이 부족합니다. 진행 중인 경기도 확인하세요.' };
+    if (s.pending || !p || p.retired || p.club === 0 || s.scouting.some(r => r.player === p.id) || s.budget < .5) return { ok: false, message: '이미 조사 중이거나, 은퇴했거나, 예산이 부족합니다. 진행 중인 경기도 확인하세요.' };
     transact(s, -.5, `${p.name} 스카우팅`);
     s.scouting.push({ player: p.id, remaining: s.staff.scout >= 4 ? 1 : 2 });
     return { ok: true, message: '스카우팅을 지시했습니다. 1~2경기 후 잠재력과 추천도를 확인하세요.' };
   }
   const upgradeCost = (s, group, key) => (s[group][key] + 1) ** 2 * (group === 'staff' ? 2 : key === 'stadium' ? 35 : key === 'recovery' ? 12 : 6);
-  const facilityUpkeep = s => round(Object.values(s.facilities).reduce((sum, level) => sum + level ** 2 * .025, 0));
+  const facilityUpkeep = () => 0;
+  function manageAIFacilities(s) {
+    for (const club of s.clubs.slice(1)) {
+      if (club.facilitySeason === s.season) continue;
+      const facilities = clubFacilities(s, club.id), account = { facilities };
+      const allowance = clubMarketCapacity(s, club).budget * .25;
+      for (const key of ['youth', 'training', 'recovery', 'stadium']) {
+        if (facilities[key] >= upgradeLimit('facilities', key)) continue;
+        const cost = upgradeCost(account, 'facilities', key);
+        if (cost > allowance) continue;
+        spendTransferBudget(s, club.id, cost);
+        facilities[key]++; break;
+      }
+      club.facilitySeason = s.season;
+    }
+  }
   function upgrade(s, group, key) {
-    if (!['staff', 'facilities'].includes(group) || !Object.hasOwn(s[group], key) || s[group][key] >= 5 || s.pending) return { ok: false, message: '현재는 업그레이드할 수 없습니다.' };
+    if (!['staff', 'facilities'].includes(group) || !Object.hasOwn(s[group], key) || s[group][key] >= upgradeLimit(group, key) || s.pending) return { ok: false, message: '현재는 업그레이드할 수 없습니다.' };
     const cost = upgradeCost(s, group, key);
     if (s.budget < cost) return { ok: false, message: '구단 예산이 부족합니다.' };
     transact(s, -cost, group === 'staff' ? '스태프 영입' : '시설 확충'); s[group][key]++;
@@ -1240,17 +1315,22 @@
       if(s?.tacticPlans!==undefined&&(!Array.isArray(s.tacticPlans)||s.tacticPlans.length!==3||!s.tacticPlans.every(p=>p===null||p&&typeof p.name==='string'&&p.name.length<=40&&FORMATIONS[p.tactics?.formation]&&['mentality','line'].every(k=>[-1,0,1].includes(p.tactics[k]))&&['press','tempo','width','passing','focus'].every(k=>[0,1,2].includes(p.tactics[k]))&&validInstructions(p.instructions)&&Array.isArray(p.roles)&&p.roles.length===11&&p.roles.every(r=>['attack','balanced','defend'].includes(r)))))return false;
       if(s?.players?.some(p=>p.leagueStats!==undefined&&(!p.leagueStats||!Object.keys(emptyLeagueStats()).every(k=>Number.isInteger(p.leagueStats[k])&&p.leagueStats[k]>=0))))return false;
       if (s?.pending?.minute !== undefined && (!Number.isInteger(s.pending.minute) || s.pending.minute<0 || s.pending.minute>90 || s.pending.half.events.some(e=>e.minute>s.pending.minute))) return false;
-      if (s?.players?.some(p => (p.position !== undefined && !Object.hasOwn(POSITIONS,p.position)) || (p.foot !== undefined && !['left','right','both'].includes(p.foot)) || (p.ambition !== undefined && (!Number.isFinite(p.ambition)||p.ambition<0||p.ambition>100)) || (p.attributes !== undefined && !Object.keys(DETAILS).every(k=>Number.isFinite(p.attributes?.[k])&&p.attributes[k]>=1&&p.attributes[k]<=99)))) return false;
+      if (s?.players?.some(p => (p.position !== undefined && !Object.hasOwn(POSITIONS,p.position)) || (p.foot !== undefined && !['left','right','both'].includes(p.foot)) || (p.ambition !== undefined && (!Number.isFinite(p.ambition)||p.ambition<0||p.ambition>100)) || (p.attributes !== undefined && !Object.keys(DETAILS).every(k=>Number.isFinite(p.attributes?.[k])&&p.attributes[k]>=1&&p.attributes[k]<=MAX_OVR)))) return false;
       if (!s || s.version !== 3 || !Number.isFinite(s.budget) || !Number.isInteger(s.seed) || !Number.isInteger(s.season) || !Number.isInteger(s.week) || s.week < 0 || !Number.isInteger(s.totalWeeks) || s.week > s.totalWeeks || s.totalWeeks !== schedule(s.clubs, s.leagues).length || s.clubs?.length !== CLUBS.length || s.leagues?.length !== LEAGUES.length || !Number.isFinite(s.confidence) || !Number.isFinite(s.target)) return false;
       if (!s.cupPlan || typeof s.cupPlan.rotation !== 'boolean' || !['same', 'balanced', 'defensive', 'attacking'].includes(s.cupPlan.approach)) return false;
       if (!['players', 'news', 'incoming', 'watch', 'results', 'transfers', 'fixtures', 'scouting', 'academy', 'ledger', 'roles', 'competitions', 'cupResults', 'honors', 'promotionNews'].every(k => Array.isArray(s[k])) || (s.transferList !== undefined && !Array.isArray(s.transferList)) || JSON.stringify(s.fixtures) !== JSON.stringify(schedule(s.clubs, s.leagues)) || s.roles.length !== 11 || !s.roles.every(r => ['attack', 'balanced', 'defend'].includes(r)) || !['balanced', 'attacking', 'defending', 'technique', 'fitness', 'rest'].includes(s.training) || ![0, 1, 2].includes(s.intensity)) return false;
-      if (!['coach', 'scout', 'medic'].every(k => Number.isInteger(s.staff?.[k]) && s.staff[k] >= 1 && s.staff[k] <= 5) || !['training', 'youth'].every(k => Number.isInteger(s.facilities?.[k]) && s.facilities[k] >= 1 && s.facilities[k] <= 5)) return false;
+      if (!['coach', 'scout', 'medic'].every(k => Number.isInteger(s.staff?.[k]) && s.staff[k] >= 1 && s.staff[k] <= 5) || !['training', 'youth'].every(k => Number.isInteger(s.facilities?.[k]) && s.facilities[k] >= 1 && s.facilities[k] <= upgradeLimit('facilities', k))) return false;
       if (['recovery', 'stadium'].some(k => s.facilities[k] !== undefined && (!Number.isInteger(s.facilities[k]) || s.facilities[k] < 0 || s.facilities[k] > 5)) || [...s.players, ...s.academy].some(p => p.cupMinutes !== undefined && (!Number.isInteger(p.cupMinutes) || p.cupMinutes < 0))) return false;
       if (s.clubs.some(c => c.lastSeason !== undefined && (!c.lastSeason || !['season', 'rank', 'played', 'pts', 'ga'].every(k => Number.isInteger(c.lastSeason[k]) && c.lastSeason[k] >= 0)))) return false;
       if (s.clubs.some(c=>c.marketSpending!==undefined&&(!c.marketSpending||!Number.isInteger(c.marketSpending.season)||c.marketSpending.season<0||!Number.isFinite(c.marketSpending.amount)||c.marketSpending.amount<0)))return false;
       if (s.players.some(p => p.history !== undefined && (!Array.isArray(p.history) || p.history.some(h => !h || ['season', 'clubGames', 'appearances', 'minutes', 'goals', 'assists', 'cleanSheets'].some(k => h[k] !== undefined && (!Number.isFinite(h[k]) || h[k] < 0)))))) return false;
       const validPlayer = (p, academy = false) => Number.isInteger(p.id) && typeof p.name === 'string' && p.name.length < 100 && Number.isInteger(p.club) && p.club >= (academy ? -2 : -1) && p.club < CLUBS.length && ['GK', 'DF', 'MF', 'FW'].includes(p.pos) && ['age', 'atk', 'def', 'tech', 'pace', 'fitness', 'morale', 'injury', 'banned', 'yellows', 'goals', 'appearances', 'potential', 'contract', 'salary'].every(k => Number.isFinite(p[k]) && p[k] >= 0) && (!p.loan || (Number.isInteger(p.loan.owner) && p.loan.owner >= 0 && p.loan.owner < CLUBS.length));
-      if (s.players.length < CLUBS.length * 22 || s.players.length > 35000 || new Set(s.players.map(p => p.id)).size !== s.players.length || !s.players.every(p => validPlayer(p)) || !s.academy.every(p => validPlayer(p, true)) || new Set([...s.players, ...s.academy].map(p => p.id)).size !== s.players.length + s.academy.length) return false;
+      if ([...s.players, ...s.academy, ...(s.retiredPlayers || [])].some(p => ['atk','def','tech','pace','potential'].some(k => p[k] > MAX_OVR) || p.attributes && !Object.keys(DETAILS).every(k => Number.isFinite(p.attributes[k]) && p.attributes[k] >= 1 && p.attributes[k] <= MAX_OVR))) return false;
+      if (s.clubs.some(c => c.facilities !== undefined && (!c.facilities || !['training','youth','recovery','stadium'].every(k => Number.isInteger(c.facilities[k]) && c.facilities[k] >= (['training','youth'].includes(k) ? 1 : 0) && c.facilities[k] <= upgradeLimit('facilities', k))) || c.facilitySeason !== undefined && (!Number.isInteger(c.facilitySeason) || c.facilitySeason > s.season))) return false;
+      if (s.retiredPlayers !== undefined && (!Array.isArray(s.retiredPlayers) || !s.retiredPlayers.every(p => validPlayer(p) && p.retired === true && p.club === -1 && !p.loan))) return false;
+      if (s.worldYouthSeason !== undefined && (!Number.isInteger(s.worldYouthSeason) || s.worldYouthSeason > s.season)) return false;
+      const allPlayers = [...s.players, ...s.academy, ...(s.retiredPlayers || [])];
+      if (s.players.length < CLUBS.length * 11 || s.players.length > 100000 || s.players.some(p => p.retired) || !s.players.every(p => validPlayer(p)) || !s.academy.every(p => validPlayer(p, true)) || new Set(allPlayers.map(p => p.id)).size !== allPlayers.length) return false;
       if (!s.leagues.every(l => typeof l.name === 'string' && typeof l.country === 'string' && typeof l.flag === 'string') || !s.news.every(n => typeof n.title === 'string' && typeof n.text === 'string') || !s.transfers.every(t => typeof t.text === 'string') || !s.ledger.every(l => Number.isFinite(l.amount) && typeof l.label === 'string') || !s.scouting.every(r => player(s, r.player) && Number.isFinite(r.remaining))) return false;
       if (!s.incoming.every(o => player(s, o.player)?.club === 0 && Number.isInteger(o.club) && o.club > 0 && o.club < CLUBS.length && Number.isFinite(o.cash) && o.cash >= 0 && /^\d+-\d+$/.test(o.id))) return false;
       const validMatchStats=m=>m.playerStats===undefined||m.playerStats&&Object.entries(m.playerStats).every(([id,stats])=>player(s,id)&&stats&&['minutes','starts','goals','assists','shots','onTarget'].every(k=>Number.isInteger(stats[k])&&stats[k]>=0)&&stats.minutes<=90&&stats.starts<=1&&stats.goals<=stats.onTarget&&stats.onTarget<=stats.shots);
@@ -1264,7 +1344,7 @@
       return s.clubs.every((c, i) => c.id === i && Number.isInteger(c.league) && c.league >= 0 && c.league < LEAGUES.length && typeof c.name === 'string' && typeof c.short === 'string' && /^#[a-f0-9]{6}$/i.test(c.color) && typeof c.stadium === 'string' && FORMATIONS[c.tactics?.formation] && ['mentality', 'line'].every(k => [-1, 0, 1].includes(c.tactics[k])) && ['press', 'tempo', 'width', 'passing', 'focus'].every(k => [0, 1, 2].includes(c.tactics[k])) && Array.isArray(c.lineup) && c.lineup.length === 11 && new Set(c.lineup).size === 11 && c.lineup.every(id => player(s, id)?.club === c.id) && Array.isArray(c.form) && c.form.every(x => ['W', 'D', 'L'].includes(x)) && ['pts', 'gf', 'ga', 'played', 'wins', 'draws', 'losses'].every(k => Number.isFinite(c[k])) && roster(s, i).length >= 11);
     } catch { return false; }
   }
-  const api = { clubMarketCapacity, commercialBonus, homeGate, cupNeutral, cupMatchIncome, weeklyIncome, weeklyWages, boardGrant, summerOpen, advanceSummerWeek, transferWindowLabel, loyalty, outsideOffer, loanOffers, loanOut, exerciseLoanOption, aiContractMarket, marketWage, contractDemand, seniorMinutes, prospectFactor, upgradeCost, facilityUpkeep, cupMatchPrize, cupWinnerPrize, defaultInstruction, tacticalPosition, setTarget, tacticPlan, DETAILS, POSITIONS, POSITION_GROUPS, SLOTS, INSTRUCTIONS, detail, upgradeSave, suitability, lineupScore, wageDemand, advanceMinute, setInstruction, matchPositions, autoWeek, filterPlayers, CLUBS, LEAGUES, FORMATIONS, newGame, roster, ovr, value, wage, payroll, windowOpen, player, available, autoLineup, standings, nextFixture, canRelease, setTactics, setLineup, askingPrice, deal, acceptOffer, toggleTransferList, getTransferOffers, sellPlayer, negotiateSale, contractTerminationPenalty, terminateContract, strength, startMatch, substitute, playWeek, nextSeason, validSave, promote, renew, scout, upgrade, talk, groupTable, asianOrder, worldClubOrder };
+  const api = { MAX_OVR, upgradeLimit, clubFacilities, manageAIFacilities, clubMarketCapacity, commercialBonus, homeGate, cupNeutral, cupMatchIncome, weeklyIncome, weeklyWages, boardGrant, summerOpen, advanceSummerWeek, transferWindowLabel, loyalty, outsideOffer, loanOffers, loanOut, exerciseLoanOption, aiContractMarket, marketWage, contractDemand, seniorMinutes, prospectFactor, upgradeCost, facilityUpkeep, cupMatchPrize, cupWinnerPrize, defaultInstruction, tacticalPosition, setTarget, tacticPlan, DETAILS, POSITIONS, POSITION_GROUPS, SLOTS, INSTRUCTIONS, detail, upgradeSave, suitability, lineupScore, wageDemand, advanceMinute, setInstruction, matchPositions, autoWeek, filterPlayers, CLUBS, LEAGUES, FORMATIONS, newGame, roster, ovr, value, wage, payroll, windowOpen, player, available, autoLineup, standings, nextFixture, canRelease, setTactics, setLineup, askingPrice, deal, acceptOffer, toggleTransferList, getTransferOffers, sellPlayer, negotiateSale, contractTerminationPenalty, terminateContract, strength, startMatch, substitute, playWeek, nextSeason, validSave, promote, renew, scout, upgrade, talk, groupTable, asianOrder, worldClubOrder };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.FM = api;
 })(globalThis);

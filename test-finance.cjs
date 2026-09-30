@@ -17,14 +17,14 @@ function eliteClub() {
 }
 async function rules() {
   const s=reportedClub(G.newGame(51));
-  assert.equal(G.payroll(s),4.33);assert.equal(G.weeklyWages(s),5.08);assert.equal(G.facilityUpkeep(s),1.88);
+  assert.equal(G.payroll(s),4.33);assert.equal(G.weeklyWages(s),5.08);assert.equal(G.facilityUpkeep(s),0);
   assert.equal(G.weeklyIncome(s,true),17.25);assert.equal(G.weeklyIncome(s),5.5);
   const cost=G.weeklyWages(s)+G.facilityUpkeep(s);
-  assert.equal(Number((G.weeklyIncome(s,true)+G.weeklyIncome(s)-cost*2).toFixed(2)),8.83);
+  assert.equal(Number((G.weeklyIncome(s,true)+G.weeklyIncome(s)-cost*2).toFixed(2)),12.59);
   // A 38-game league and 8 bye weeks can cover this squad, including four summer weeks,
   // before prizes, player sales or board money. Expensive squads still require extra revenue.
   const income=19*G.weeklyIncome(s,true)+27*G.weeklyIncome(s);
-  assert.equal(Number((income-50*cost).toFixed(2)),128.25);
+  assert.equal(Number((income-50*cost).toFixed(2)),222.25);
   assert(income<50*(cost+5),'an extra 5억 payroll must not be automatically subsidized');
   const elite=eliteClub();
   assert.equal(G.weeklyWages(elite),13.2);assert.equal(G.commercialBonus(elite),25.86);
@@ -77,7 +77,7 @@ async function rules() {
     const label=kind==='home'?'홈 경기 수입 + 방송권·스폰서':'방송권 + 스폰서';
     assert.equal(game.ledger.find(l=>l.label===label).amount,kind==='home'?17.25:5.5);
     assert.equal(game.ledger.find(l=>l.label==='선수 및 스태프 주급').amount,-5.08);
-    assert.equal(game.ledger.find(l=>l.label==='시설 주간 운영비').amount,-1.88);
+    assert(!game.ledger.some(l=>l.label==='시설 주간 운영비'));
     assert.equal(game.budget,Math.round((before+game.ledger.reduce((sum,l)=>sum+l.amount,0))*100)/100);
     assert(G.validSave(copy(game)));
   }
@@ -117,7 +117,7 @@ async function ui() {
     s.ledger=[{amount:370.9,label:'방송권 + 스폰서',season:2029,week:37},{amount:-1000,label:'시설 확충',season:2029,week:37},{amount:-100,label:'선수 및 스태프 주급',season:2029,week:37},{amount:-12.6,label:'시설 주간 운영비',season:2029,week:37}];
     await tab.evaluate(data=>{state=data;closeModal();page='office';render();},s);
     const text=await tab.locator('#finance-outlook').innerText();
-    for(const value of ['6.96억','17.25억','+10.29억','5.50억','-1.46억','+8.83억','14.69억'])assert(text.includes(value),value);
+    for(const value of ['5.08억','17.25억','+12.17억','5.50억','+0.42억','+12.59억','14.69억'])assert(text.includes(value),value);
     assert(await tab.getByText('다음 시즌 지원금 500억 예상 (현재 리그 기준)',{exact:true}).isVisible());
     assert(await tab.getByText('최근 4건 합계 · 수입 370.9억 / 지출 1112.6억',{exact:true}).isVisible());
     await tab.locator('#finance-spending summary').click();

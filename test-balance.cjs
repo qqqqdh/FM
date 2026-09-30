@@ -83,17 +83,17 @@ const budget = old.budget;
 G.upgradeSave(old); assert.equal(old.budget,budget); assert.deepEqual(G.upgradeSave(copy(old)),old);
 for (const filename of ['touchline-2028-R3.json','touchline-2029-R20.json']) {
   const saved = JSON.parse(fs.readFileSync(filename,'utf8'));
-  const balance = saved.budget, players = saved.players.length;
+  const balance = saved.budget, playerIds = saved.players.map(p => p.id);
   assert(G.validSave(saved),filename);
   G.upgradeSave(saved);
-  assert(G.validSave(saved)); assert.equal(saved.budget,balance); assert.equal(saved.players.length,players);
+  assert(G.validSave(saved)); assert.equal(saved.budget,balance); assert(playerIds.every(id => G.player(saved, id)), 'existing player records survive world youth intake');
 }
 fresh.budget=10000;
 for (const key of ['recovery','stadium']) {
   for (let level=0;level<5;level++) {
     const cost=G.upgradeCost(fresh,'facilities',key), money=fresh.budget, upkeep=G.facilityUpkeep(fresh);
     assert(G.upgrade(fresh,'facilities',key).ok);
-    assert.equal(fresh.budget,money-cost); assert(G.facilityUpkeep(fresh)>upkeep);
+    assert.equal(fresh.budget,money-cost); assert.equal(G.facilityUpkeep(fresh),0);
   }
   assert(!G.upgrade(fresh,'facilities',key).ok);
 }
@@ -103,7 +103,7 @@ const sum = () => ai.reduce((n,p)=>n+p.atk+p.def+p.tech+p.pace,0);
 const initial = sum();
 G.autoWeek(fresh);
 assert(sum()>initial,'AI must train during the same weekly progression');
-assert(fresh.ledger.some(l=>l.label==='시설 주간 운영비' && l.amount===-G.facilityUpkeep(fresh)));
+assert(!fresh.ledger.some(l=>l.label==='시설 주간 운영비'));
 assert(G.validSave(copy(fresh)));
 fresh.facilities.youth=5; fresh.week=fresh.totalWeeks;
 assert(G.nextSeason(fresh));
