@@ -44,8 +44,8 @@ for (const chosen of ['레스터 시티', '선덜랜드', 'FC 안양']) {
   // Transfers, loans, released players and namesakes must not confuse migration.
   const origin = faes.club;
   faes.club = (origin + 1) % s.clubs.length;
-  faes.loan = {owner: origin};
-  mavididi.club = -1;
+  faes.loan = {owner: origin, until:s.season+1};
+  mavididi.club = -1; mavididi.freeSince=s.season*52+s.week;
   const namesake = s.players.find(p => !seedNames.has(p.name));
   namesake.name = 'Wout Faes';
   const youth = s.academy[0]; youth.name = '김정훈';

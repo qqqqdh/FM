@@ -178,9 +178,10 @@ const G = require('./engine.js');
     await saved();assert.equal(await page.evaluate(()=>state.week),1);
     await page.locator('#modal .modal-close').click();
     await page.locator('[data-page="squad"]').first().click();
-    await page.locator('[data-squad-option="view"]').selectOption('league');
+    await page.locator('[data-squad-option="view"]').selectOption('stats');
     await page.locator('[data-squad-option="sort"]').selectOption('minutes');
-    assert.match(await page.locator('#squad-table').textContent(),/90분당 득점/);
+    await page.locator('[data-squad-option="detailed"]').check();
+    assert.match(await page.locator('#squad-table').textContent(),/90분당 골/);
     assert(await page.evaluate(()=>G.roster(state).reduce((n,p)=>n+(p.leagueStats?.minutes||0),0)===990));
     const squadName=await page.evaluate(()=>G.roster(state)[0].name);
     await page.locator('#squad-search').fill(squadName);
@@ -233,13 +234,18 @@ const G = require('./engine.js');
     await page.waitForFunction(()=>!batchRunning);
     assert.equal(await page.evaluate(()=>state.week),21);
     assert.match(await page.locator('#batch-progress').textContent(),/3경기 완료.*4주 진행/);
-    // Existing small localStorage saves migrate without changing or deleting the original.
+    // The expanded world fixture cannot be seeded into native localStorage (quota tested above).
+    // Emulate its existing record; IndexedDB migration is real, and writes/deletes remain observable.
     const legacy = G.newGame(3); legacy.careerSelected = true;
     delete legacy.instructions;
     [...legacy.players,...legacy.academy].forEach(p=>{delete p.position;delete p.foot;delete p.ambition;delete p.attributes;});
     const legacyRaw = JSON.stringify(legacy), context = await browser.newContext(), migration = await context.newPage();
     await migration.addInitScript(raw => {
-      if (!localStorage.getItem('touchline-save-v3')) localStorage.setItem('touchline-save-v3', raw);
+      let record = raw;
+      const native = { get: Storage.prototype.getItem, set: Storage.prototype.setItem, remove: Storage.prototype.removeItem };
+      Storage.prototype.getItem = function(key) { return this === localStorage && key === 'touchline-save-v3' ? record : native.get.call(this,key); };
+      Storage.prototype.setItem = function(key,value) { if(this === localStorage && key === 'touchline-save-v3') record=String(value); else native.set.call(this,key,value); };
+      Storage.prototype.removeItem = function(key) { if(this === localStorage && key === 'touchline-save-v3') record=null; else native.remove.call(this,key); };
     }, legacyRaw);
     await migration.goto(url);
     await migration.waitForFunction(() => document.querySelector('#save-state')?.textContent === '자동 저장됨');

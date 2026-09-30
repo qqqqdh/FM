@@ -9,7 +9,7 @@ const footNames = {left:'왼발',right:'오른발',both:'양발'};
 function playerPosition(p) { G.detail(p); return `<span class="position ${p.pos.toLowerCase()}" title="${G.POSITIONS[p.position]}">${p.position}</span><small> ${footNames[p.foot]}</small>`; }
 function playerDetailsUI(p) {
   G.detail(p);
-  return `<p class="muted">${G.POSITIONS[p.position]} · ${footNames[p.foot]} · 상위리그 열망 ${p.ambition}/100</p><div class="detail-stats">${Object.entries(G.DETAILS).map(([k,n])=>`<div><span>${n}</span><b>${p.attributes[k]}</b><meter min="0" max="100" value="${p.attributes[k]}"></meter></div>`).join('')}</div>`;
+  return `<p class="muted">${G.POSITIONS[p.position]} · ${footNames[p.foot]} · 상위리그 열망 ${p.ambition}/100</p>${G.prospectFactor(p)<1 ? `<p class="field-help">유스 실전 검증: 리그·컵 누적 ${G.seniorMinutes(p).toLocaleString()} / 2,700분 · 시장 가치 ${Math.round(G.prospectFactor(p)*100)}% 반영</p>` : ''}<div class="detail-stats">${Object.entries(G.DETAILS).map(([k,n])=>`<div><span>${n}</span><b>${p.attributes[k]}</b><meter min="0" max="100" value="${p.attributes[k]}"></meter></div>`).join('')}</div>`;
 }
 function selectOptions(options, current) { return Object.entries(options).map(([v,n])=>`<option value="${v}" ${String(v)===String(current)?'selected':''}>${n}</option>`).join(''); }
 function marketFiltersUI() {
@@ -253,7 +253,7 @@ function squadScreen() {
       <label>상태<select data-squad-option="available">${selectOptions({ all: '전체 선수', fit: '출전 가능만' }, squadAvailable ? 'fit' : 'all')}</select></label>
     </div>
     <div id="squad-table">${squadTable()}</div>
-  </section>`;
+  </section>${loanPanel()}`;
 }
 function squadTable() {
   const ps = squadPlayers();

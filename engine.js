@@ -20,10 +20,39 @@
   }
   const roster = (s, team = 0) => s.players.filter(p => p.club === team);
   const ovr = p => Math.round(p.pos === 'GK' ? p.def * .7 + p.tech * .2 + p.pace * .1 : p.pos === 'DF' ? p.def * .55 + p.pace * .2 + p.tech * .25 : p.pos === 'MF' ? p.tech * .55 + p.def * .2 + p.atk * .25 : p.atk * .6 + p.pace * .25 + p.tech * .15);
-  const value = p => Math.round((ovr(p) - 45) * (ovr(p) - 45) / 27 * (p.age < 24 ? 1.22 : p.age > 30 ? .75 : 1));
-  const wage = p => p.salary ?? round(ovr(p) * .002);
+  const seniorMinutes = p => (p.leagueStats?.minutes ?? (p.appearances || 0) * 60) + (p.cupMinutes || 0) + (p.history || []).reduce((n, h) => n + (h.minutes ?? (h.appearances || 0) * 60), 0);
+  const prospectFactor = p => p.id > CLUBS.length * 22 ? .25 + .75 * Math.min(1, seniorMinutes(p) / 2700) : 1;
+  const value = p => Math.max(1, Math.round(Math.max(0, ovr(p) - 45) ** 2 / 27 * (p.age < 24 ? 1.22 : p.age > 30 ? .75 : 1) * prospectFactor(p) * (1 + Math.max(0, ovr(p) - 65) ** 2 / 80)));
+  const marketWage = p => round(.08 + Math.max(0, ovr(p) - 60) ** 2 * .0008);
+  const wage = p => p.salary ?? marketWage(p);
   const payroll = s => round(roster(s).reduce((a, p) => a + wage(p), 0));
-  const windowOpen = s => s.week < 5 || (s.week >= 11 && s.week < 14);
+  const weeklyWages = s => round(payroll(s) + Object.values(s.staff).reduce((sum, level) => sum + level * .05, 0));
+  // Sponsorship and broadcasting continue during league bye weeks; summer has no league income.
+  const homeGate = s => round((s.leagues[0].tier === 1 ? 8 : 3) + (s.facilities.stadium || 0) * 1.25);
+  function commercialBonus(s) {
+    if (s.leagues[0].tier !== 1) return 0;
+    const ratings = roster(s).map(ovr).sort((a,b) => b-a).slice(0,18);
+    // Ability drives commercial value; paying inflated wages never raises income.
+    return round(Math.max(0, ratings.reduce((sum,n) => sum+n,0) / Math.max(18,ratings.length) - 75) * 1.75);
+  }
+  const weeklyIncome = (s, home = false) => round((s.leagues[0].tier === 1 ? 5.5 + commercialBonus(s) : 3.5) + (home ? homeGate(s) : 0));
+  const boardGrant = s => Math.round((100 + clamp(s.confidence, 0, 100) * 4) / s.leagues[0].tier ** 2);
+  const summerOpen = s => s.week === s.totalWeeks && (s.summerWeek || 0) < 4;
+  const windowOpen = s => s.week < 5 || (s.week >= 11 && s.week < 14) || summerOpen(s);
+  const loanEnd = s => s.season + (s.week === s.totalWeeks ? 2 : 1);
+  const marketTick = s => s.season * 52 + s.week + (s.summerWeek || 0);
+  const transferWindowLabel = s => summerOpen(s) ? `여름 이적시장 · ${4 - (s.summerWeek || 0)}주 남음` : s.week < 5 ? `개막 이적시장 · ${5-s.week}주 남음` : s.week >= 11 && s.week < 14 ? `중간 이적시장 · ${14-s.week}주 남음` : s.week < 11 ? '12라운드 재개장 · FA 상시 영입' : s.week < s.totalWeeks ? '시즌 종료 후 여름 시장 · FA 상시 영입' : '다음 시즌 재개장 · FA 상시 영입';
+  const loyalty = (s, p) => p.joinedClub === (p.loan?.owner ?? (p.club === -2 ? 0 : p.club)) && p.club !== -1 ? clamp(Math.floor((marketTick(s) - (p.joinedAt ?? marketTick(s))) / 52 * 10), 0, 80) : 0;
+  function movePlayer(s, p, club) {
+    const offer = p.contractOffer;
+    p.transferListed=false;
+    s.incoming=s.incoming.filter(o=>o.player!==p.id);
+    s.transferList=(s.transferList||[]).filter(id=>id!==p.id);
+    p.club = club; p.joinedClub = club; p.joinedAt = marketTick(s);
+    delete p.contractOffer; delete p.freeSince; delete p.renewedAt;
+    if (club === -1) { p.freeSince = marketTick(s); if (offer?.expires >= marketTick(s)) p.contractOffer = offer; }
+  }
+  const outsideOffer = (s, p) => p.club === 0 && !p.loan && p.contract <= s.season + 1 && p.contractOffer?.expires >= marketTick(s) ? p.contractOffer : null;
   const indexes = new WeakMap();
   function player(s, id) {
     let index = indexes.get(s);
@@ -98,7 +127,27 @@
     return p;
   }
   function upgradeSave(s) {
+    s.summerWeek ??= 0;
+    s.academy.forEach(p => { p.joinedClub ??= 0; p.joinedAt ??= marketTick(s); });
+    s.facilities.recovery ??= 0;
+    s.facilities.stadium ??= 0;
+    // Reprice outstanding offers once when loading the new economy; keep cash and player progress.
+    if (!s.economyVersion) {
+      s.incoming.forEach(o => { o.cash = Math.min(o.cash, Math.ceil(value(player(s, o.player)) * 1.3)); });
+      s.economyVersion = 1;
+    }
     s.players.forEach(p => {
+      if (p.joinedAt === undefined) {
+        let since = s.season;
+        const club = p.loan?.owner ?? p.club;
+        for (const h of (p.history || []).slice().sort((a,b) => b.season-a.season)) {
+          if (h.season >= since) continue;
+          if (h.season !== since-1 || h.club !== club) break;
+          since = h.season;
+        }
+        p.joinedClub = club; p.joinedAt = since < s.season ? since * 52 : marketTick(s);
+      }
+      if (p.club === -1) p.freeSince ??= marketTick(s);
       // Seed IDs survive transfers, loans and promotion/relegation. Names alone can collide with youth players.
       const origin = s.clubs[Math.floor((p.id - 1) / 22)];
       const seed = ROSTERS[origin?.name]?.[(p.id - 1) % 22];
@@ -113,6 +162,7 @@
     s.tacticPlans ||= [null,null,null];
     s.transferList ||= [];
     s.players.forEach(p => { p.transferListed ??= s.transferList.includes(p.id); p.history ||= []; });
+    s.incoming=s.incoming.filter(o=>{const p=player(s,o.player),club=s.clubs[o.club];return p&&club&&club.id>0&&transferTerms(s,p,club,o.cash).ok;});
     if (s.pending) s.pending.minute ??= 45;
     return s;
   }
@@ -197,7 +247,7 @@
       const generatedName = randomName(s, originLeague.flag);
       const p = { id: c * 22 + i + 1, name: seedPlayer?.[0] || generatedName, club: c, pos, age: 19 + Math.floor(rng(s) * 15), atk: stat(pos === 'FW' ? 5 : -5), def: stat(pos === 'DF' || pos === 'GK' ? 6 : -6), tech: stat(pos === 'MF' ? 6 : 0), pace: stat(2), fitness: 93 + Math.floor(rng(s) * 8), morale: 75, injury: 0, banned: 0, yellows: 0, goals: 0, appearances: 0, potential: Math.min(95, base + 10 + Math.floor(rng(s) * 9)), contract: 2027 + Math.floor(rng(s) * 3), promised: 'rotation', loan: null };
       if (seedPlayer) p.position = seedPlayer[1];
-      p.salary = round(ovr(p) * .002); s.players.push(p);
+      p.salary = marketWage(p); s.players.push(p);
     });
     s.clubs.forEach(c => { c.lineup = autoLineup(s, c.id); });
     s.captain = s.clubs[0].lineup[1];
@@ -254,13 +304,15 @@
   function wageDemand(s, p, buyer = 0) {
     const gap = Math.max(0, s.leagues[s.clubs[buyer].league].tier - (p.club >= 0 ? s.leagues[s.clubs[p.club].league].tier : s.leagues[s.clubs[buyer].league].tier));
     const premium = gap * detail(p).ambition / 100 * .8;
-    return { gap, premium, salary: round(wage(p) * (1 + premium)) };
+    const base = p.club === -1 ? Math.max(marketWage(p) * .7, wage(p) * (1 - clamp((marketTick(s) - (p.freeSince ?? marketTick(s))) * .025, 0, .5))) : Math.max(wage(p), marketWage(p));
+    return { gap, premium, salary: round(base * (1 + premium)) };
   }
-  function deal(s, id, cash, swapId = null, loan = false, salary = null) {
+  function deal(s, id, cash, swapId = null, loan = false, salary = null, optionPrice = null) {
     if (s.pending) return { ok: false, message: '진행 중인 경기를 먼저 마쳐 주세요.' };
-    if (!windowOpen(s)) return { ok: false, message: '현재 이적시장이 닫혀 있습니다. 12라운드에 다시 열립니다.' };
     const p = player(s, id), swap = swapId ? player(s, swapId) : null;
-    if (!p || p.club === 0 || !Number.isFinite(cash) || cash < 0 || (swapId && (!swap || swap.club !== 0))) return { ok: false, message: '제안 조건을 확인해 주세요.' };
+    if (!windowOpen(s) && p?.club !== -1) return { ok: false, message: transferWindowLabel(s) };
+    if (!p || p.club === 0 || p.loan || !Number.isFinite(cash) || cash < 0 || (swapId && (!swap || swap.club !== 0 || swap.loan))) return { ok: false, message: '제안 조건을 확인해 주세요. 임대 중인 선수는 합의된 옵션으로만 완전이적할 수 있습니다.' };
+    if (optionPrice !== null && (!loan || !Number.isFinite(optionPrice) || optionPrice <= 0)) return {ok:false,message:'임대 완전이적 옵션 금액을 확인하세요.'};
     if (cash > s.budget) return { ok: false, message: '이적 예산이 부족합니다.' };
     if ((loan && (swap || p.club === -1)) || (swap && p.club === -1)) return { ok: false, message: '임대 및 자유 계약에는 선수 교환을 사용할 수 없습니다.' };
     if (!canRelease(s, p.id)) return { ok: false, message: '상대 구단이 해당 포지션의 선수 부족으로 판매를 거절했습니다.' };
@@ -268,13 +320,15 @@
     if (!swap && roster(s).length >= 25) return { ok: false, message: '최대 등록 인원은 25명입니다. 먼저 선수를 매각하세요.' };
     const credit = swap ? Math.floor(value(swap) * .85) : 0, required = loan ? Math.ceil(askingPrice(s, id) * .2) : askingPrice(s, id);
     if (cash + credit < required) return { ok: false, counter: Math.max(0, required - credit), message: `${s.clubs[p.club]?.name || '선수 에이전트'}의 역제안: 현금 ${Math.max(0, required - credit)}억 원${swap ? ' + 교환 선수' : ''}.` };
+    if (optionPrice !== null && optionPrice < askingPrice(s,id)) return {ok:false,purchaseCounter:askingPrice(s,id),message:`${s.clubs[p.club].name}의 역제안: 완전이적 옵션 ${askingPrice(s,id)}억 원을 원합니다. 임대료와 별도로 지급하는 금액입니다.`};
     const demand = wageDemand(s,p), offered = salary === null ? wage(p) : Number(salary);
     if (!Number.isFinite(offered) || offered < demand.salary) return { ok:false, salaryCounter:demand.salary, message:`${demand.gap ? '더 높은 리그에서 뛰고 싶어 하는 선수입니다. 하부리그 이적 보상으로 ' : ''}최소 주급 ${demand.salary.toFixed(2)}억을 원합니다.` };
     if (swap) { const swapDemand = wageDemand(s,swap,p.club); if (wage(swap) < swapDemand.salary) return {ok:false,message:'교환 대상 선수가 하부리그 이적을 거절했습니다. 현금 영입으로 협상하세요.'}; }
     const from = p.club;
-    if (swap) swap.club = from;
-    p.salary = round(offered); p.club = 0; p.contract = Math.max(p.contract, s.season + 2); p.morale = 85;
-    if (loan) p.loan = { owner: from, until: s.season + 1 };
+    if (swap) movePlayer(s, swap, from);
+    p.salary = round(offered); p.contract = Math.max(p.contract, s.season + 2); p.morale = 85;
+    if (loan) { p.club = 0; p.loan = { owner: from, until: loanEnd(s), purchasePrice:optionPrice }; }
+    else movePlayer(s, p, 0);
     transact(s, -cash, loan ? '임대 영입' : '선수 영입');
     const text = `${p.name} ${loan ? '시즌 임대' : '영입'} · ${cash}억 원${swap ? ` + ${swap.name} 교환` : ''}`;
     s.transfers.unshift({ text, week: s.week, season: s.season });
@@ -290,21 +344,14 @@
     if (!available.length) return;
     const listed = available.filter(p => s.transferList.includes(p.id) || p.transferListed);
     const chosenPool = (listed.length && rng(s) < 0.75) ? listed : available;
-    const p = chosenPool[Math.floor(rng(s) * chosenPool.length)], club = 1 + Math.floor(rng(s) * (s.clubs.length - 1));
-    s.incoming = [{ id: `${s.season}-${s.week}`, player: p.id, club, cash: Math.ceil(value(p) * (.95 + rng(s) * .35)) }];
+    const p = chosenPool[Math.floor(rng(s) * chosenPool.length)], offers = getTransferOffers(s,p.id);
+    s.incoming = offers.length ? [{...offers[Math.floor(rng(s)*offers.length)],id:`${s.season}-${s.week}`}] : [];
   }
   function acceptOffer(s, id) {
     if (s.pending) return { ok: false, message: '진행 중인 경기를 먼저 마쳐 주세요.' };
     const o = s.incoming.find(x => x.id === id);
     if (!o || !windowOpen(s) || player(s, o.player)?.club !== 0 || !canRelease(s, o.player)) return { ok: false, message: '이 제안을 수락할 수 없습니다. 최소 스쿼드 인원을 확인하세요.' };
-    const p = player(s, o.player); p.club = o.club; p.transferListed = false; transact(s, o.cash, '선수 매각');
-    const text = `${p.name} → ${s.clubs[o.club].name} · ${o.cash}억 원`;
-    s.transfers.unshift({ text, season: s.season, week: s.week });
-    s.news.unshift({ title: '선수 매각 완료', text, type: 'transfer', week: s.week });
-    s.incoming = s.incoming.filter(x => x.id !== id);
-    s.transferList = (s.transferList || []).filter(x => x !== p.id);
-    fixLineups(s);
-    return { ok: true, message: `${p.name} 매각 완료. ${o.cash}억 원이 입금되었습니다.` };
+    return sellPlayer(s,o.player,o.club,o.cash);
   }
   function toggleTransferList(s, id) {
     s.transferList ||= [];
@@ -324,29 +371,33 @@
     const p = player(s, id);
     if (!p || p.club !== 0 || p.loan) return [];
     const val = value(p);
-    const offers = [];
+    const offers = [], squads=s.clubs.map(()=>[]);
+    s.players.forEach(q=>{if(q.club>=0)squads[q.club].push(q);});
     const seedBase = (s.season * 1000 + s.week * 50 + p.id) >>> 0;
-    for (let i = 0; i < 3; i++) {
-      const cid = 1 + ((seedBase + i * 97) % (s.clubs.length - 1));
-      if (!offers.some(c => c.club === cid)) {
-        const factor = 0.9 + ((seedBase + i * 31) % 35) / 100;
+    for (const club of s.clubs.slice(1)) {
+      const cid=club.id;
+        const factor = 0.9 + ((seedBase + cid * 31) % 35) / 100;
         const offerCash = Math.max(1, Math.round(val * factor));
+        const terms=transferTerms(s,p,club,offerCash,squads[cid]);
+        if(!terms.ok)continue;
         offers.push({
           id: `offer-${p.id}-${cid}`,
           player: p.id,
           club: cid,
           cash: offerCash,
+          salary:terms.salary,
+          score:terms.score,
+          reason:terms.reason,
           clubName: s.clubs[cid].name,
           clubColor: s.clubs[cid].color,
           leagueName: s.leagues[s.clubs[cid].league]?.name || ''
         });
-      }
     }
-    return offers;
+    return offers.sort((a,b)=>b.score-a.score||b.cash-a.cash||a.club-b.club).slice(0,3);
   }
   function sellPlayer(s, id, buyerClubId, cash) {
     if (s.pending) return { ok: false, message: '진행 중인 경기를 먼저 마쳐 주세요.' };
-    if (!windowOpen(s)) return { ok: false, message: '현재 이적시장이 닫혀 있습니다. 1~5라운드 및 12~14라운드에 협상할 수 있습니다.' };
+    if (!windowOpen(s)) return { ok: false, message: transferWindowLabel(s) };
     const p = player(s, id);
     if (!p || p.club !== 0) return { ok: false, message: '우리 팀 소속 선수만 매각할 수 있습니다.' };
     if (p.loan) return { ok: false, message: '임대 선수는 판매할 수 없습니다.' };
@@ -354,8 +405,12 @@
     buyerClubId = Number(buyerClubId); cash = Number(cash);
     if (!s.clubs[buyerClubId] || buyerClubId === 0) return { ok: false, message: '매각 대상 구단이 올바르지 않습니다.' };
     if (!Number.isFinite(cash) || cash <= 0) return { ok: false, message: '이적료 금액을 확인해 주세요.' };
-
-    p.club = buyerClubId;
+    if (cash > Math.ceil(value(p) * 1.3)) return { ok: false, message: '현재 시장 가치에 비해 높은 금액입니다. 매각 제안을 다시 확인해 주세요.' };
+    const terms=transferTerms(s,p,s.clubs[buyerClubId],cash);
+    if(!terms.ok)return terms;
+    spendTransferBudget(s,buyerClubId,cash);
+    p.salary=terms.salary;p.contract=Math.max(p.contract,s.season+2);
+    movePlayer(s, p, buyerClubId);
     p.transferListed = false;
     transact(s, cash, '선수 매각');
     const text = `${p.name} → ${s.clubs[buyerClubId].name} · ${cash}억 원`;
@@ -375,12 +430,15 @@
     buyerClubId = Number(buyerClubId); asking = Number(asking);
     const buyer = s.clubs[buyerClubId];
     if (!buyer || buyerClubId === 0) return { ok: false, message: '상대 구단을 확인해 주세요.' };
+    if(p.loan||!Number.isFinite(asking)||asking<=0)return {ok:false,message:'이적료와 선수 계약 상태를 확인하세요.'};
+    const terms=transferTerms(s,p,buyer,0);
+    if(!terms.ok)return terms;
     const val = value(p);
-    const maxAcceptable = Math.ceil(val * 1.25);
-    const counterOffer = Math.max(1, Math.round(val * 1.05));
+    const maxAcceptable = Math.min(Math.ceil(val * 1.25),terms.budget);
+    const counterOffer = Math.min(Math.max(1, Math.round(val * 1.05)),terms.budget);
     if (asking <= maxAcceptable) {
       return sellPlayer(s, id, buyerClubId, asking);
-    } else if (asking <= Math.ceil(val * 1.6)) {
+    } else if (counterOffer>=Math.round(val*.7) && asking <= Math.ceil(val * 1.6)) {
       return { ok: false, counter: counterOffer, message: `${buyer.name}의 역제안: ${asking}억 원은 너무 높습니다. ${counterOffer}억 원에 영입을 제안합니다.` };
     } else {
       return { ok: false, message: `${buyer.name}에서 요구 이적료가 너무 과도하여 협상을 거절했습니다.` };
@@ -405,7 +463,7 @@
     if (s.budget < penalty) return { ok: false, message: `계약 해지 위약금(${penalty.toFixed(1)}억 원)을 지급할 구단 예산이 부족합니다. (현재 예산: ${s.budget.toFixed(1)}억 원)` };
 
     transact(s, -penalty, '계약 해지 위약금');
-    p.club = -1;
+    movePlayer(s, p, -1);
     p.transferListed = false;
     p.contract = s.season + 1;
     const text = `${p.name} 계약 해지 (위약금 ${penalty.toFixed(1)}억 원 정산 후 FA 방출)`;
@@ -452,9 +510,9 @@
     let choice=rng(s)*total;
     return ps.find((_,i)=>(choice-=weights[i])<=0)||ps[ps.length-1];
   }
-  function simulate(s, h, a, period = 1, offset = 0) {
+  function simulate(s, h, a, period = 1, offset = 0, neutral = false) {
     const hs=strength(s,h), as=strength(s,a), ht=s.clubs[h].tactics, at=s.clubs[a].tactics;
-    const expectations=[clamp(1.25+(hs.attack-as.defense)*.039+.2+(at.line===1&&ht.passing===2?.22:0),.25,3.8),clamp(1.25+(as.attack-hs.defense)*.039+(ht.line===1&&at.passing===2?.22:0),.25,3.8)];
+    const expectations=[clamp(1.25+(hs.attack-as.defense)*.039+(neutral?0:.2)+(at.line===1&&ht.passing===2?.22:0),.25,3.8),clamp(1.25+(as.attack-hs.defense)*.039+(ht.line===1&&at.passing===2?.22:0),.25,3.8)];
     const events=[], shots=[0,0], onTarget=[0,0], goals=[0,0], xg=[0,0], playerStats={};
     const instruction=p=>p.club===0?s.instructions?.[s.clubs[0].lineup.indexOf(p.id)]:null;
     for(const cid of [h,a])for(const id of s.clubs[cid].lineup)playerStats[id]={minutes:Math.round(90*period),starts:offset===0?1:0,goals:0,assists:0,shots:0,onTarget:0};
@@ -595,24 +653,157 @@
   }
   function train(s) {
     const focus = { attacking: 'atk', defending: 'def', technique: 'tech', fitness: 'pace' }[s.training];
-    roster(s).forEach(p => {
-      if (p.injury) return;
-      if (s.training === 'rest') { p.fitness = clamp(p.fitness + 10, 0, 100); p.morale = clamp(p.morale + 2, 0, 100); return; }
-      p.fitness = clamp(p.fitness - s.intensity * 2 + (s.training === 'fitness' ? 4 : 0), 35, 100);
-      const chance = .04 + s.staff.coach * .012 + s.facilities.training * .015 + s.intensity * .025;
-      if (ovr(p) < p.potential && rng(s) < chance) { const stat = focus || ['atk', 'def', 'tech', 'pace'][Math.floor(rng(s) * 4)]; p[stat] = clamp(p[stat] + 1, 40, 95); }
-      if (s.intensity === 2 && rng(s) < .012) p.injury = 1;
+    s.players.forEach(p => {
+      if (p.club < 0 || p.injury) return;
+      const own = p.club === 0;
+      if (own) {
+        p.fitness = clamp(p.fitness + (s.facilities.recovery || 0), 35, 100);
+        if (s.training === 'rest') { p.fitness = clamp(p.fitness + 10, 0, 100); p.morale = clamp(p.morale + 2, 0, 100); return; }
+        p.fitness = clamp(p.fitness - s.intensity * 2 + (s.training === 'fitness' ? 4 : 0), 35, 100);
+      }
+      const level = own ? s.facilities.training : 6 - s.leagues[s.clubs[p.club].league].tier;
+      const chance = (.04 + (own ? s.staff.coach : level) * .012 + level * .015 + (own ? s.intensity : 1) * .025) * (p.age <= 23 ? 1 : p.age <= 29 ? .7 : .25) * (ovr(p) >= 80 ? .6 : 1);
+      if (ovr(p) < p.potential && rng(s) < chance) {
+        const stat = own && focus || ['atk', 'def', 'tech', 'pace'][Math.floor(rng(s) * 4)];
+        develop(p, stat, 1);
+      }
+      if (own && s.intensity === 2 && rng(s) < .012 * (1 - (s.facilities.recovery || 0) * .1)) p.injury = 1;
     });
   }
+  function develop(p, stat, amount) {
+    const before = p[stat];
+    p[stat] = clamp(before + amount, 40, 95);
+    const keys = { atk: ['finishing', 'heading'], def: ['tackling', 'marking', 'positioning', 'reflexes', 'handling'], tech: ['passing', 'vision', 'dribbling', 'crossing'], pace: ['acceleration', 'stamina'] }[stat];
+    if (p.attributes) keys.forEach(k => { p.attributes[k] = clamp(p.attributes[k] + p[stat] - before, 1, 99); });
+  }
   function aiTransfers(s) {
-    if (!windowOpen(s)) return;
-    for (let i = 0; i < 3; i++) {
+    if (windowOpen(s)) for (let i = 0; i < Math.ceil(s.clubs.length / 40); i++) {
       const buyer = 1 + Math.floor(rng(s) * (s.clubs.length - 1)), seller = 1 + Math.floor(rng(s) * (s.clubs.length - 1));
       if (buyer === seller || roster(s, buyer).length >= 25) continue;
-      const candidates = roster(s, seller).filter(p => canRelease(s, p.id) && !s.clubs[seller].lineup.includes(p.id));
-      const p = candidates[Math.floor(rng(s) * candidates.length)];
-      if (p) { p.salary = wageDemand(s,p,buyer).salary; p.club = buyer; s.transfers.unshift({ text: `[세계 이적] ${p.name}: ${s.clubs[seller].name} → ${s.clubs[buyer].name} · ${value(p)}억`, season: s.season, week: s.week }); }
+      const squad = roster(s, buyer), tier = s.leagues[s.clubs[buyer].league].tier;
+      const candidates = roster(s, seller).filter(p => p.age <= 28 && canRelease(s, p.id) && !s.clubs[seller].lineup.includes(p.id) && ovr(p) <= 86 - (tier - 1) * 8 && ovr(p) > Math.min(...squad.filter(q => q.pos === p.pos).map(ovr)) + 2);
+      const p = candidates.sort((a, b) => ovr(b) - ovr(a))[0];
+      if (p) { const terms=transferTerms(s,p,s.clubs[buyer],value(p),squad);if(!terms.ok)continue;spendTransferBudget(s,buyer,value(p));p.salary = terms.salary; movePlayer(s, p, buyer); s.transfers.unshift({ text: `[세계 이적] ${p.name}: ${s.clubs[seller].name} → ${s.clubs[buyer].name} · ${value(p)}억`, season: s.season, week: s.week }); }
     }
+    aiContractMarket(s);
+  }
+  function clubMarketCapacity(s, club) {
+    const league=s.leagues[club.league], tier=league.tier;
+    // Game balance bands, not real-world club accounts. Spending is a season cap; sales do not inflate it.
+    const scale=['EN','ES','DE','IT','FR','SA'].includes(league.flag)?1:['PT','NL','BR'].includes(league.flag)?.65:['KR','JP','CN','AE','QA'].includes(league.flag)?.35:.15;
+    const origin=LEAGUES[club.origin], rank=Math.max(0,origin.teams.indexOf(club.name));
+    const size=1-.5*rank/Math.max(1,origin.teams.length-1);
+    const total=Math.round(1800*scale*size/tier**3);
+    return {budget:Math.max(0,total-(club.marketSpending?.season===s.season?club.marketSpending.amount:0)),wage:round(Math.max(.12,1.6*Math.sqrt(scale)*size/tier**1.4)),rating:99-(tier-1)*10-(scale<.3?16:scale<.6?7:scale<.9?3:0)};
+  }
+  function spendTransferBudget(s, cid, amount) {
+    const club=s.clubs[cid];
+    club.marketSpending={season:s.season,amount:round((club.marketSpending?.season===s.season?club.marketSpending.amount:0)+amount)};
+  }
+  function transferTerms(s,p,club,cash,squad=roster(s,club.id)) {
+    const capacity=clubMarketCapacity(s,club),salary=wageDemand(s,p,club.id).salary;
+    if(cash>capacity.budget)return {ok:false,message:`${club.name}의 남은 시즌 영입 예산(${capacity.budget}억)을 초과합니다.`};
+    const from=p.loan?.owner??p.club, source=from>=0?s.leagues[s.clubs[from].league].tier:3;
+    const productive=(p.history||[]).filter(h=>h.season>=s.season-3&&h.season<s.season&&(h.goals||0)+(h.assists||0)>=10).length>=2;
+    if(ovr(p)>capacity.rating || (p.age<=30&&productive&&ovr(p)>=80&&s.leagues[club.league].tier>source))return {ok:false,message:'선수가 현재 기량·최근 시즌 활약에 비해 리그 수준이 낮아 이적을 거절했습니다.'};
+    const score=recruitmentScore(s,p,club,squad.filter(q=>q!==p),salary);
+    if(score===null)return {ok:false,message:`${club.name}이 주급 한도·포지션 수요·등록 인원을 검토한 뒤 영입을 거절했습니다.`};
+    const position=detail(p).position, peers=squad.filter(q=>q!==p&&detail(q).position===position).sort((a,b)=>ovr(b)-ovr(a));
+    const reason=peers.length?`${position} 보강 · 현 선수 최고 OVR ${ovr(peers[0])}`:`${position} 전문 선수 부족`;
+    return {ok:true,salary,score:score+(productive?3:0),budget:capacity.budget,reason};
+  }
+  function recruitmentScore(s, p, club, squad, salary) {
+    const capacity=clubMarketCapacity(s,club);
+    if (squad.length >= 25 || salary > capacity.wage || squad.reduce((n,q)=>n+wage(q),0)+salary>capacity.wage*25) return null;
+    const tier = s.leagues[club.league].tier, rating = ovr(p);
+    if (rating < 66 - (tier - 1) * 8 || p.injury > 8) return null;
+    const position=detail(p).position;
+    const peers = squad.filter(q => detail(q).position === position).sort((a,b) => ovr(b)-ovr(a));
+    const starters = SLOTS[club.tactics.formation].filter(pos => pos === position).length;
+    if(!starters)return null;
+    const target = peers.length ? ovr(peers[Math.min(Math.max(0,starters-1),peers.length-1)]) : 45;
+    if (peers.length >= starters + 1 && rating < (ovr(peers[0]) + 2)) return null;
+    if (rating < target - 1 && !(p.age <= 23 && p.potential > target + 4 && rating >= target - 6)) return null;
+    return rating - target + (p.age <= 23 ? Math.max(0,p.potential-rating)*.1 : 0) + (3-tier)*3;
+  }
+  function loanOffers(s, id) {
+    const p = player(s,id) || s.academy.find(p=>p.id===Number(id));
+    if (!p || ![0,-2].includes(p.club) || p.loan) return [];
+    const squads=s.clubs.map(()=>[]); s.players.forEach(q=>{if(q.club>=0)squads[q.club].push(q);});
+    return s.clubs.slice(1).map(c=>({club:c.id,score:recruitmentScore(s,p,c,squads[c.id],wage(p)),fee:Math.max(1,Math.ceil(value(p)*.2)),purchasePrice:Math.max(1,Math.round(value(p)*1.05))})).filter(o=>o.score!==null&&o.fee<=clubMarketCapacity(s,s.clubs[o.club]).budget).sort((a,b)=>b.score-a.score||a.club-b.club).slice(0,8);
+  }
+  function loanOut(s, id, buyer, optionPrice = null) {
+    const p=player(s,id)||s.academy.find(p=>p.id===Number(id)), academy=p?.club===-2;
+    if(s.pending||!windowOpen(s)||!p||![0,-2].includes(p.club)||p.loan)return {ok:false,message:'이적시장에 우리 1군·유스 선수만 임대할 수 있습니다.'};
+    if(!academy&&!canRelease(s,p.id))return {ok:false,message:'임대 후에도 최소 스쿼드와 포지션 인원을 유지해야 합니다.'};
+    if(!academy&&p.contract<=loanEnd(s))return {ok:false,message:'임대 복귀 전에 계약이 끝납니다. 먼저 재계약해 주세요.'};
+    const offer=loanOffers(s,id).find(o=>o.club===Number(buyer));
+    if(!offer)return {ok:false,message:'상대 구단이 포지션 수요·주급·등록 인원을 검토한 뒤 임대를 거절했습니다.'};
+    if(optionPrice!==null&&(!Number.isFinite(optionPrice)||optionPrice<=0))return {ok:false,message:'완전이적 옵션 금액을 확인하세요.'};
+    if(optionPrice!==null&&optionPrice>Math.ceil(value(p)*1.25))return {ok:false,purchaseCounter:offer.purchasePrice,message:`${s.clubs[offer.club].name}의 역제안: 완전이적 옵션 ${offer.purchasePrice}억 원에 합의할 수 있습니다.`};
+    spendTransferBudget(s,offer.club,offer.fee);
+    p.loan={owner:0,until:loanEnd(s),academy,purchasePrice:optionPrice}; p.club=offer.club; p.transferListed=false; delete p.contractOffer;
+    if(academy){p.contract=Math.max(p.contract,loanEnd(s)+1);s.academy=s.academy.filter(q=>q.id!==p.id);s.players.push(p);indexes.delete(s);}
+    s.incoming=s.incoming.filter(o=>o.player!==p.id);s.transferList=s.transferList.filter(id=>id!==p.id);
+    transact(s,offer.fee,'선수 임대 수입');
+    const text=`${p.name} → ${s.clubs[offer.club].name} · ${p.loan.until}년 복귀 · 임대료 ${offer.fee}억 · 주급 상대팀 부담${optionPrice!==null?` · 완전이적 옵션 ${optionPrice}억`:''}`;
+    s.transfers.unshift({text,season:s.season,week:s.week});s.news.unshift({title:'임대 계약 체결',text,type:'transfer',week:s.week});fixLineups(s);
+    return {ok:true,message:text};
+  }
+  function buyLoanPlayer(s, id) {
+    const p=player(s,id), loan=p?.loan;
+    if(s.pending||!windowOpen(s)||!loan||loan.purchasePrice==null||(loan.owner!==0&&p.club!==0))return {ok:false,message:'이적시장에 합의된 완전이적 옵션을 행사할 수 있습니다.'};
+    if(p.club===0&&s.budget<loan.purchasePrice)return {ok:false,message:'완전이적 옵션을 행사할 예산이 부족합니다.'};
+    const buyer=p.club,price=loan.purchasePrice,owner=loan.owner;
+    if(buyer!==0){const terms=transferTerms(s,p,s.clubs[buyer],price);if(!terms.ok)return terms;spendTransferBudget(s,buyer,price);p.salary=terms.salary;}
+    if(buyer===0)transact(s,-price,'임대 선수 완전 영입');
+    else if(owner===0)transact(s,price,'임대 완전이적 옵션 수입');
+    p.loan=null;movePlayer(s,p,buyer);p.contract=Math.max(p.contract,s.season+2);
+    const text=`${p.name}: ${s.clubs[owner].name} → ${s.clubs[buyer].name} · 합의된 옵션 ${price}억으로 완전이적`;
+    s.transfers.unshift({text,season:s.season,week:s.week});s.news.unshift({title:'완전이적 옵션 행사',text,type:'transfer',week:s.week});
+    return {ok:true,message:text};
+  }
+  function exerciseLoanOption(s,id) {
+    if(player(s,id)?.club!==0)return {ok:false,message:'완전이적 옵션은 임차 구단이 결정합니다.'};
+    return buyLoanPlayer(s,id);
+  }
+  function aiContractMarket(s) {
+    const squads = s.clubs.map(() => []);
+    s.players.forEach(p => { if (p.club >= 0) squads[p.club].push(p); });
+    const suitors = (p, salary) => s.clubs.slice(1).map(c => ({ club:c.id, score:recruitmentScore(s,p,c,squads[c.id],salary) })).filter(c => c.score !== null).sort((a,b) => b.score-a.score || a.club-b.club);
+    if(windowOpen(s)) for(const p of s.players.filter(p=>p.loan?.owner===0&&p.loan.purchasePrice!=null)) {
+      if(p.loan.purchasePrice<=value(p)*1.25&&recruitmentScore(s,p,s.clubs[p.club],squads[p.club].filter(q=>q!==p),wage(p))!==null&&rng(s)<.15)buyLoanPlayer(s,p.id);
+    }
+    for (const p of s.players.filter(p => p.club === -1)) {
+      const salary = wageDemand(s,p).salary, choices = suitors(p,salary);
+      if (!choices.length || rng(s) >= .45) continue;
+      const promised = p.contractOffer?.expires >= marketTick(s) && choices.find(c => c.club === p.contractOffer.club && recruitmentScore(s,p,s.clubs[c.club],squads[c.club],p.contractOffer.salary) !== null);
+      const choice = promised || choices[Math.floor(rng(s) * Math.min(6,choices.length))];
+      const agreed = promised ? p.contractOffer.salary : salary, years=promised?p.contractOffer.years:(p.age>=31?1:2);
+      movePlayer(s,p,choice.club); p.salary = agreed; p.contract = s.season + years; p.promised='rotation'; p.transferListed=false; p.morale=75;
+      squads[choice.club].push(p);
+      const text = `${p.name} → ${s.clubs[choice.club].name} · FA 영입 · 주급 ${agreed.toFixed(2)}억`;
+      s.transfers.unshift({text,season:s.season,week:s.week});
+      s.news.unshift({title:'자유계약 선수의 새 출발',text,type:'transfer',week:s.week});
+    }
+    let offers = 0;
+    for (const p of squads[0]) {
+      if (p.contractOffer && (!outsideOffer(s,p))) delete p.contractOffer;
+      if (p.loan || p.contract > s.season+1 || marketTick(s)-(p.renewedAt??0)<12 || outsideOffer(s,p) || offers >= 2 || rng(s) >= .2) continue;
+      const salary = round(Math.max(wage(p)*1.1,marketWage(p)*(1.15+rng(s)*.35))), choices = suitors(p,salary);
+      if (!choices.length) continue;
+      const buyer = choices[Math.floor(rng(s)*Math.min(6,choices.length))].club;
+      p.contractOffer = {club:buyer,salary,years:p.age>=31?2:3,expires:marketTick(s)+6}; offers++;
+      s.news.unshift({title:'계약 만료 예정 선수에게 외부 제안',text:`${s.clubs[buyer].name}: ${p.name}에게 만료 후 ${p.contractOffer.years}년 계약·주급 ${salary.toFixed(2)}억 제안. 재계약 요구액에 반영됩니다.`,type:'transfer',week:s.week});
+    }
+  }
+  function advanceSummerWeek(s) {
+    if (s.pending || !summerOpen(s)) return {ok:false,message:'시즌 종료 후 최대 4주 동안 여름 시장을 진행할 수 있습니다.'};
+    aiTransfers(s); s.summerWeek = (s.summerWeek || 0) + 1;
+    const cost = round(weeklyWages(s) + facilityUpkeep(s));
+    transact(s,-cost,`여름 시장 ${s.summerWeek}주차 주급·시설 운영비`);
+    fixLineups(s); makeOffer(s); s.news=s.news.slice(0,30);
+    return {ok:true,message:`여름 시장 ${s.summerWeek}/4주 진행 · 운영비 ${cost.toFixed(2)}억 · 이적 소식과 계약 제안을 확인하세요.`};
   }
   function playWeek(s) {
     if (s.week >= s.totalWeeks) return null;
@@ -634,8 +825,9 @@
     s.pending = null;
     const mine = results.find(m => m.h === 0 || m.a === 0);
     const featured = mine || { h: 0, a: 0, hg: 0, ag: 0, homeXg: 0, awayXg: 0, possession: 50, shots: [0, 0], events: [], week: s.week, season: s.season, rest: true };
-    const revenue = mine ? (mine.h === 0 ? 6.5 : 3.5) : 1.2, salary = payroll(s) + Object.values(s.staff).reduce((a, b) => a + b * .05, 0), net = round(revenue - salary);
-    transact(s, revenue, mine ? (mine.h === 0 ? '홈 경기 수입 + 스폰서' : '방송권 + 스폰서') : '휴식 주간 수입'); transact(s, -salary, '선수 및 스태프 주급');
+    const revenue = weeklyIncome(s, mine?.h === 0), salary = weeklyWages(s), upkeep = facilityUpkeep(s), net = round(revenue - salary - upkeep);
+    transact(s, revenue, mine?.h === 0 ? '홈 경기 수입 + 방송권·스폰서' : '방송권 + 스폰서'); transact(s, -salary, '선수 및 스태프 주급');
+    transact(s, -upkeep, '시설 주간 운영비');
     results.forEach(m => { if (m.h !== 0 && m.a !== 0) { m.events = []; delete m.playerStats; delete m.lastAction; } });
     s.results.push(...results); s.lastMatch = featured; s.week++;
     processCups(s);
@@ -655,11 +847,18 @@
   function nextSeason(s) {
     if (s.week !== s.totalWeeks || s.pending) return false;
     const qualification = europeanOrder(s);
-    const grant = Math.round((s.confidence >= 60 ? 60 : 25) / s.leagues[0].tier);
+    s.leagues.forEach((l, li) => standings(s, li).forEach((c, i) => { c.lastSeason = { season: s.season, rank: i + 1, played: c.played, pts: c.pts, ga: c.ga }; }));
     resolvePromotions(s);
+    const grant = boardGrant(s);
     const finishedSeason = s.season;
-    s.season++; s.week = 0; transact(s, grant, '새 시즌 구단 지원금'); s.results = []; s.lastMatch = null;
-    s.players.forEach(p => { if (p.loan) { p.club = p.loan.owner; p.loan = null; } });
+    s.season++; s.week = 0; s.summerWeek = 0; transact(s, grant, '새 시즌 구단 지원금'); s.results = []; s.lastMatch = null;
+    const returnedYouth = [], releasedYouth = [];
+    s.academy.forEach(p => {
+      p.age++;
+      if(p.age>=23){movePlayer(s,p,-1);releasedYouth.push(p);}
+      else { for(const stat of ['atk','def','tech','pace']) if(ovr(p)<p.potential)develop(p,stat,1); p.contract=Math.max(p.contract,s.season+1); }
+    });
+    s.academy=s.academy.filter(p=>p.club===-2);
     s.clubs.forEach(c => { Object.assign(c, { pts: 0, gf: 0, ga: 0, played: 0, wins: 0, draws: 0, losses: 0, form: [] }); });
     s.players.forEach(p => {
       p.history ||= [];
@@ -668,6 +867,7 @@
           season: finishedSeason,
           club: p.club,
           clubName: s.clubs[p.club]?.name || '자유 계약',
+          clubGames: s.clubs[p.club]?.lastSeason?.played || 0,
           appearances: p.appearances,
           starts: p.leagueStats?.starts || 0,
           subIn: Math.max(0, p.appearances - (p.leagueStats?.starts || 0)),
@@ -682,20 +882,34 @@
       }
       p.leagueStats=emptyLeagueStats(); p.cupGoals=0;
       p.age++; p.goals = 0; p.appearances = 0; p.fitness = 100; p.injury = 0; p.banned = 0; p.yellows = 0;
-      const change = p.age <= 24 && ovr(p) < p.potential ? 1 : p.age >= 32 ? -1 : 0;
-      for (const stat of ['atk', 'def', 'tech', 'pace']) p[stat] = clamp(p[stat] + change, 40, 95);
-      if (p.contract <= s.season) {
-        if (p.club === 0) { p.club = -1; s.news.unshift({ title: '계약 만료', text: `${p.name} 선수가 자유 계약으로 떠났습니다. 유소년 보충 선수가 합류합니다.`, type: 'transfer', week: 0 }); }
-        else p.contract = s.season + 2;
+      const change = p.age <= (p.club > 0 ? 29 : 24) && ovr(p) < p.potential ? 1 : p.age >= 32 ? -1 : 0;
+      for (const stat of ['atk', 'def', 'tech', 'pace']) develop(p, stat, change);
+      if(p.loan && (p.loan.until<=s.season || p.loan.academy && p.age>=23)) {
+        const loan=p.loan; p.loan=null;
+        if(loan.academy && loan.owner===0) {
+          if(p.age>=23){movePlayer(s,p,-1);releasedYouth.push(p);}
+          else {p.club=-2;p.contract=Math.max(p.contract,s.season+1);returnedYouth.push(p);}
+        } else p.club=loan.owner;
+      }
+      if (!p.loan && p.contract <= s.season) {
+        if (p.club === 0) { movePlayer(s,p,-1); s.news.unshift({ title: '계약 만료', text: `${p.name} 선수가 자유 계약으로 떠났습니다. 유소년 보충 선수가 합류합니다.`, type: 'transfer', week: 0 }); }
+        else if (p.club > 0) p.contract = s.season + 2;
       }
     });
+    s.players=s.players.filter(p=>p.club!==-2);
+    for(const p of releasedYouth){
+      if(!s.players.includes(p))s.players.push(p);
+      s.news.unshift({title:'유스 계약 종료',text:`${p.name}: 23세까지 1군 콜업을 받지 못해 FA로 전환되었습니다.`,type:'transfer',week:0});
+    }
+    s.academy.push(...returnedYouth); indexes.delete(s);
+    s.scouting=s.scouting.filter(r=>player(s,r.player));
     for (const pos of ['GK', 'DF', 'MF', 'FW']) {
       const min = pos === 'GK' ? 2 : pos === 'DF' || pos === 'MF' ? 6 : 4;
-      while (roster(s).filter(p => p.pos === pos).length < min) { const p = youngPlayer(s, pos); p.club = 0; s.players.push(p); }
+      while (roster(s).filter(p => p.pos === pos).length < min) { const p = youngPlayer(s, pos); movePlayer(s,p,0); s.players.push(p); }
     }
     s.news.unshift({ title: `${s.season} 시즌 개막`, text: `이적시장 재개장 · 지원금 ${grant}억 원 · 성장, 노화, 계약 만료, 임대 복귀 반영`, type: 'club', week: 0 });
     youthIntake(s); s.fixtures = schedule(s.clubs, s.leagues); s.totalWeeks = s.fixtures.length; initCompetitions(s, qualification);
-    fixLineups(s); makeOffer(s); return true;
+    aiContractMarket(s); fixLineups(s); makeOffer(s); return true;
   }
   function shuffle(s, xs) {
     const a = xs.slice();
@@ -802,6 +1016,13 @@
     s.competitions.sort((a, b) => (order[a.id] ?? 99) - (order[b.id] ?? 99));
   }
   const groupTable = group => group.slice().sort((a, b) => b.pts - a.pts || (b.gf - b.ga) - (a.gf - a.ga) || b.gf - a.gf || a.id - b.id);
+  // In-game venue rule: the Club World Cup and single-match cup finals use neutral grounds.
+  const cupNeutral = cup => cup.kind === 'world' || cup.phase === 'knockout' && cup.next.length === 1;
+  function cupMatchIncome(s, cup, h, a) {
+    if(h===null||a===null||h!==0&&a!==0)return {broadcast:0,gate:0};
+    const continental=['europe','asia'].includes(cup.kind);
+    return {broadcast:continental||cup.kind==='world'?4:2,gate:h===0&&!cupNeutral(cup)?round(homeGate(s)*(continental?1.25:1)):0};
+  }
   function cupMatchPrize(cup, roundLabel, won, draw) {
     if (!won && !draw) return 0;
     const isCWC = cup.id === 'club-world-cup';
@@ -819,6 +1040,7 @@
     if (roundLabel === '16강') return isCWC ? 150 : isUCL ? 120 : isUEL ? 40 : isACL ? 6 : isLeagueCup ? 4 : 3;
     return isLeagueCup ? 2 : 1.5;
   }
+  const cupWinnerPrize = cup => cup.id === 'club-world-cup' ? 500 : cup.id === 'champions' ? 300 : cup.id === 'afc-champions' ? 140 : cup.id === 'europa' ? 150 : cup.kind === 'league-cup' ? 40 : 30;
   function processCups(s) {
     for (const cup of s.competitions.filter(c => c.nextWeek === s.week && c.winner === null)) {
       const winners = [], roundLabel = cup.phase === 'groups' ? `조별리그 ${cup.round + 1}차전` : cup.next.length === 1 ? '결승' : cup.next.length === 2 ? '준결승' : `${cup.next.length * 2}강`;
@@ -840,7 +1062,8 @@
             });
           }
         }
-        const m = simulate(s, h, a); m.week = s.week - 1; m.competition = cup.id; m.label = roundLabel;
+        const neutral = cupNeutral(cup), m = simulate(s, h, a, 1, 0, neutral);
+        m.neutral=neutral; m.week = s.week - 1; m.competition = cup.id; m.label = roundLabel;
         if (cup.phase === 'groups') {
           const table = cup.groups.find(g => g.some(row => row.id === h));
           [[h, m.hg, m.ag], [a, m.ag, m.hg]].forEach(([id, gf, ga]) => { const row = table.find(x => x.id === id); row.played++; row.gf += gf; row.ga += ga; row.pts += gf > ga ? 3 : gf === ga ? 1 : 0; });
@@ -850,6 +1073,7 @@
           winners.push(winner); m.winner = winner;
         }
         m.events.forEach(e => { const p = player(s, e.player); p.cupGoals = (p.cupGoals || 0) + 1; });
+        Object.entries(m.playerStats || {}).forEach(([id, stats]) => { const p = player(s, id); p.cupMinutes = (p.cupMinutes || 0) + stats.minutes; });
         for (const cid of [h, a]) s.clubs[cid].lineup.forEach(id => { const p = player(s, id); p.fitness = clamp(p.fitness - 4 - s.clubs[cid].tactics.press, 35, 100); });
         if (h === 0 || a === 0) {
           const myGoals = h === 0 ? m.hg : m.ag, oppGoals = h === 0 ? m.ag : m.hg;
@@ -857,15 +1081,17 @@
           const won = isGroup ? (myGoals > oppGoals) : (m.winner === 0);
           const draw = isGroup && (myGoals === oppGoals);
           const matchPrize = cupMatchPrize(cup, roundLabel, won, draw);
-          const matchIncome = (cup.kind === 'europe' || cup.kind === 'asia' || cup.kind === 'world') ? 4 : 2;
-          transact(s, matchIncome, `${cup.name} 경기 수입`);
+          const income = cupMatchIncome(s,cup,h,a);
+          m.income={...income,prize:matchPrize};
+          transact(s, income.broadcast, `${cup.name} 방송권·참가 수입`);
+          if(income.gate>0)transact(s,income.gate,`${cup.name} 홈구장 수입`);
           let prizeNote = '';
           if (matchPrize > 0) {
             transact(s, matchPrize, `${cup.name} ${roundLabel} ${won ? '승리 상금' : '무승부 상금'}`);
             s.confidence = clamp(s.confidence + (won ? 2 : 1), 0, 100);
             prizeNote = ` · ${won ? '승리' : '무승부'} 상금 ${matchPrize}억 원 획득!`;
           }
-          s.news.unshift({ title: `${cup.name} · ${roundLabel}${won ? ' 승리!' : draw ? ' 무승부' : ''}`, text: `${s.clubs[h].name} ${m.hg} : ${m.ag} ${s.clubs[a].name}${m.penalties ? ` (승부차기 ${m.penalties.join(':')})` : ''}${prizeNote}`, type: 'match', week: s.week });
+          s.news.unshift({ title: `${cup.name} · ${roundLabel}${won ? ' 승리!' : draw ? ' 무승부' : ''}`, text: `${s.clubs[h].name} ${m.hg} : ${m.ag} ${s.clubs[a].name}${m.penalties ? ` (승부차기 ${m.penalties.join(':')})` : ''} · ${neutral?'중립구장':s.clubs[h].stadium} · 방송권·참가 수입 ${income.broadcast}억${income.gate>0?` · 홈구장 수입 ${income.gate}억`:''}${prizeNote}`, type: 'match', week: s.week });
         } else m.events = [];
         delete m.playerStats; delete m.lastAction;
         cup.results.push(m); s.cupResults.push(m);
@@ -883,7 +1109,7 @@
         cup.winner = winners[0]; cup.phase = 'complete'; cup.next = []; cup.nextWeek = null;
         s.honors.unshift({ season: s.season, competition: cup.name, winner: cup.winner });
         if (cup.winner === 0) {
-          const prize = cup.id === 'club-world-cup' ? 500 : cup.id === 'champions' ? 300 : cup.id === 'afc-champions' ? 140 : cup.id === 'europa' ? 150 : cup.kind === 'league-cup' ? 40 : 30;
+          const prize = cupWinnerPrize(cup);
           transact(s, prize, `${cup.name} 우승 상금`);
           s.confidence = clamp(s.confidence + 15, 0, 100);
         }
@@ -911,7 +1137,7 @@
     }
   }
   function youngPlayer(s, pos, index = 0, existingNames = []) {
-    const base = 51 + s.facilities.youth * 3 + Math.floor(rng(s) * 9);
+    const base = 48 + s.facilities.youth * 2 + Math.floor(rng(s) * 9);
     const id = Math.max(0, ...s.players.map(p => p.id), ...s.academy.map(p => p.id)) + 1 + index;
     const flag = LEAGUES[s.clubs[0].origin].flag;
     let name = randomName(s, flag);
@@ -920,7 +1146,7 @@
       name = randomName(s, flag);
       attempts++;
     }
-    return detail({ id, name, club: -2, pos, age: 16 + Math.floor(rng(s) * 3), atk: base + (pos === 'FW' ? 10 : 0), def: base + (pos === 'GK' || pos === 'DF' ? 10 : 0), tech: base + (pos === 'MF' ? 10 : 0), pace: base + 5, fitness: 100, morale: 85, injury: 0, banned: 0, yellows: 0, goals: 0, appearances: 0, potential: clamp(base + 14 + Math.floor(rng(s) * 15), 60, 95), contract: s.season + 3, salary: .08, promised: 'prospect', loan: null });
+    return detail({ id, name, club: -2, joinedClub:0, joinedAt:marketTick(s), pos, age: 16 + Math.floor(rng(s) * 3), atk: base + (pos === 'FW' ? 10 : 0), def: base + (pos === 'GK' || pos === 'DF' ? 10 : 0), tech: base + (pos === 'MF' ? 10 : 0), pace: base + 5, fitness: 100, morale: 85, injury: 0, banned: 0, yellows: 0, goals: 0, appearances: 0, potential: clamp(base + 14 + Math.floor(rng(s) * 15), 60, 95), contract: s.season + 3, salary: .08, promised: 'prospect', loan: null, transferListed: false, history: [] });
   }
   function youthIntake(s) {
     const fresh = [];
@@ -928,22 +1154,50 @@
     for (let i = 0; i < positions.length; i++) {
       fresh.push(youngPlayer(s, positions[i], i, fresh.map(p => p.name)));
     }
-    s.academy = fresh;
+    s.academy.push(...fresh);
   }
   function promote(s, id) {
     const p = s.academy.find(x => x.id === Number(id));
     if (s.pending || !p || roster(s).length >= 25) return { ok: false, message: '경기 종료 후, 1군 등록 인원 25명 이내에서 승격할 수 있습니다.' };
-    p.club = 0; s.players.push(p); s.academy = s.academy.filter(x => x.id !== p.id);
+    p.club=0; p.joinedClub=0; p.joinedAt??=marketTick(s); p.contract=Math.max(p.contract,s.season+3); p.transferListed ??= false; p.history ||= []; s.players.push(p); s.academy = s.academy.filter(x => x.id !== p.id);
     return { ok: true, message: `${p.name} 선수가 1군에 합류했습니다.` };
+  }
+  function contractDemand(s, p, years = 1, promised = 'rotation') {
+    const club = s.clubs[p.club], previous = (p.history || []).findLast(h => h.season === s.season - 1);
+    const current = club.played >= 5, record = current ? p.leagueStats : previous;
+    const team = current ? club : club.lastSeason;
+    const games = current ? club.played : previous ? previous.clubGames || team?.played || Math.max(20, previous.appearances || 0) : 0;
+    const appearances = current ? p.appearances : previous?.appearances || 0;
+    const minutes = record?.minutes ?? appearances * 60;
+    const usage = games ? clamp((minutes / (games * 90) - .6) * .3, -.18, .12) : 0;
+    const goals = record?.goals ?? (current ? p.goals : 0), assists = record?.assists || 0;
+    let form = 0;
+    if (minutes >= 450) {
+      if (p.pos === 'GK') form = clamp(((record?.cleanSheets || 0) / Math.max(1, record?.matches || appearances) - .25) * .4, -.1, .18);
+      else if (p.pos === 'DF') form = clamp((team?.played ? (1.25 - team.ga / team.played) * .08 : 0) + (goals + assists) * 90 / minutes * .08, -.1, .18);
+      else form = clamp(((goals + assists) * 90 / minutes - (p.pos === 'FW' ? .65 : .35)) * .22, -.1, .18);
+    }
+    const teamRate = team?.played >= 5 ? clamp((team.pts / team.played - 1.35) * .08, -.1, .1) : 0;
+    const endYear = Math.max(p.contract, s.season + years), duration = endYear - s.season;
+    const term = (duration - 1) * (p.age <= 23 ? .04 : p.age >= 30 ? -.04 : -.015);
+    const role = promised === 'key' ? -.04 : promised === 'prospect' && p.age > 23 ? .08 : 0;
+    const loyaltyRate = -loyalty(s,p)*.0025, offer = outsideOffer(s,p);
+    const base = Math.max(.04, round(marketWage(p) * (1 + usage + form + teamRate + term + role + loyaltyRate)));
+    const salary = Math.max(base, offer ? round(offer.salary*(1+loyaltyRate)) : 0);
+    return { salary, bonus: round(salary * (6 + duration * 2)), endYear, duration, minutes, games, goals, assists, loyalty:loyalty(s,p), offer,
+      source: current ? '이번 시즌' : previous ? '지난 시즌' : '성적 자료 없음',
+      factors: [{ label: '출전 비중', rate: usage }, { label: '개인 활약', rate: form }, { label: '팀 성적', rate: teamRate }, { label: '계약 기간', rate: term }, { label: '약속 역할', rate: role }, {label:'구단 충성도',rate:loyaltyRate}, {label:'외부 제안',rate:(salary-base)/marketWage(p)}] };
   }
   function renew(s, id, years, salary, promised) {
     const p = player(s, id);
     if (s.pending || !p || p.club !== 0 || p.loan || ![1, 2, 3, 4].includes(years) || !Number.isFinite(salary) || salary < 0 || !['key', 'rotation', 'prospect'].includes(promised)) return { ok: false, message: '계약 조건을 확인하세요. 임대 선수는 재계약할 수 없습니다.' };
-    const demand = round(Math.max(p.salary, ovr(p) * .002) * (promised === 'key' ? 1.05 : 1.2));
-    if (salary < demand) return { ok: false, message: `선수의 요구 주급은 ${demand}억 원입니다.`, counter: demand };
-    const bonus = round(salary * 3);
+    if(marketTick(s)-(p.renewedAt??0)<12)return {ok:false,message:'최근 합의한 계약입니다. 재계약 후 12주가 지나면 다시 협상할 수 있습니다.'};
+    const demand = contractDemand(s, p, years, promised);
+    if (salary < demand.salary) return { ok: false, message: `성적·역할·${demand.duration}년 계약을 반영한 요구 주급은 ${demand.salary.toFixed(2)}억 원입니다.`, counter: demand.salary };
+    const bonus = round(salary * (6 + demand.duration * 2));
     if (s.budget < bonus) return { ok: false, message: `계약 보너스 ${bonus}억 원을 지급할 예산이 부족합니다.` };
-    p.salary = round(salary); p.contract = Math.max(p.contract, s.season + years); p.promised = promised; p.morale = clamp(p.morale + 12, 0, 100);
+    p.salary = round(salary); p.contract = demand.endYear; p.promised = promised; p.morale = clamp(p.morale + 12, 0, 100);
+    delete p.contractOffer; p.renewedAt=marketTick(s);
     transact(s, -bonus, `${p.name} 재계약 보너스`);
     return { ok: true, message: `${p.name} · ${p.contract}년까지 재계약 · 주급 ${p.salary}억` };
   }
@@ -954,9 +1208,11 @@
     s.scouting.push({ player: p.id, remaining: s.staff.scout >= 4 ? 1 : 2 });
     return { ok: true, message: '스카우팅을 지시했습니다. 1~2경기 후 잠재력과 추천도를 확인하세요.' };
   }
+  const upgradeCost = (s, group, key) => (s[group][key] + 1) ** 2 * (group === 'staff' ? 2 : key === 'stadium' ? 35 : key === 'recovery' ? 12 : 6);
+  const facilityUpkeep = s => round(Object.values(s.facilities).reduce((sum, level) => sum + level ** 2 * .025, 0));
   function upgrade(s, group, key) {
     if (!['staff', 'facilities'].includes(group) || !Object.hasOwn(s[group], key) || s[group][key] >= 5 || s.pending) return { ok: false, message: '현재는 업그레이드할 수 없습니다.' };
-    const cost = (s[group][key] + 1) * (group === 'staff' ? 3 : 7);
+    const cost = upgradeCost(s, group, key);
     if (s.budget < cost) return { ok: false, message: '구단 예산이 부족합니다.' };
     transact(s, -cost, group === 'staff' ? '스태프 영입' : '시설 확충'); s[group][key]++;
     return { ok: true, message: `${cost}억 원 투자 완료. 레벨 ${s[group][key]}로 개선되었습니다.` };
@@ -971,6 +1227,14 @@
   }
   function validSave(s) {
     try {
+      if(s?.summerWeek!==undefined&&(!Number.isInteger(s.summerWeek)||s.summerWeek<0||s.summerWeek>4||s.summerWeek>0&&s.week!==s.totalWeeks))return false;
+      for(const p of [...(s?.players||[]),...(s?.academy||[])]) {
+        if(['joinedAt','freeSince','renewedAt'].some(k=>p[k]!==undefined&&(!Number.isInteger(p[k])||p[k]<0)))return false;
+        if(p.joinedClub!==undefined&&(!Number.isInteger(p.joinedClub)||p.joinedClub< -1||p.joinedClub>=CLUBS.length))return false;
+        const o=p.contractOffer;
+        if(o&&(!Number.isInteger(o.club)||o.club<=0||o.club>=CLUBS.length||!Number.isFinite(o.salary)||o.salary<=0||![1,2,3,4].includes(o.years)||!Number.isInteger(o.expires)))return false;
+        if(p.loan&&(!Number.isInteger(p.loan.until)||p.loan.until<0||p.loan.owner===p.club||p.club<0||p.loan.academy!==undefined&&typeof p.loan.academy!=='boolean'||p.loan.purchasePrice!=null&&(!Number.isFinite(p.loan.purchasePrice)||p.loan.purchasePrice<=0)))return false;
+      }
       const validInstructions=xs=>Array.isArray(xs)&&xs.length===11&&xs.every(ins=>ins&&Object.entries(INSTRUCTIONS).every(([k,values])=>ins[k]===undefined||Object.hasOwn(values,ins[k]))&&['attack','defend'].every(phase=>[ins[phase+'X'],ins[phase+'Y']].every(v=>v==null||Number.isFinite(v)&&v>=5&&v<=95)));
       if(s?.instructions!==undefined&&!validInstructions(s.instructions))return false;
       if(s?.tacticPlans!==undefined&&(!Array.isArray(s.tacticPlans)||s.tacticPlans.length!==3||!s.tacticPlans.every(p=>p===null||p&&typeof p.name==='string'&&p.name.length<=40&&FORMATIONS[p.tactics?.formation]&&['mentality','line'].every(k=>[-1,0,1].includes(p.tactics[k]))&&['press','tempo','width','passing','focus'].every(k=>[0,1,2].includes(p.tactics[k]))&&validInstructions(p.instructions)&&Array.isArray(p.roles)&&p.roles.length===11&&p.roles.every(r=>['attack','balanced','defend'].includes(r)))))return false;
@@ -981,13 +1245,17 @@
       if (!s.cupPlan || typeof s.cupPlan.rotation !== 'boolean' || !['same', 'balanced', 'defensive', 'attacking'].includes(s.cupPlan.approach)) return false;
       if (!['players', 'news', 'incoming', 'watch', 'results', 'transfers', 'fixtures', 'scouting', 'academy', 'ledger', 'roles', 'competitions', 'cupResults', 'honors', 'promotionNews'].every(k => Array.isArray(s[k])) || (s.transferList !== undefined && !Array.isArray(s.transferList)) || JSON.stringify(s.fixtures) !== JSON.stringify(schedule(s.clubs, s.leagues)) || s.roles.length !== 11 || !s.roles.every(r => ['attack', 'balanced', 'defend'].includes(r)) || !['balanced', 'attacking', 'defending', 'technique', 'fitness', 'rest'].includes(s.training) || ![0, 1, 2].includes(s.intensity)) return false;
       if (!['coach', 'scout', 'medic'].every(k => Number.isInteger(s.staff?.[k]) && s.staff[k] >= 1 && s.staff[k] <= 5) || !['training', 'youth'].every(k => Number.isInteger(s.facilities?.[k]) && s.facilities[k] >= 1 && s.facilities[k] <= 5)) return false;
+      if (['recovery', 'stadium'].some(k => s.facilities[k] !== undefined && (!Number.isInteger(s.facilities[k]) || s.facilities[k] < 0 || s.facilities[k] > 5)) || [...s.players, ...s.academy].some(p => p.cupMinutes !== undefined && (!Number.isInteger(p.cupMinutes) || p.cupMinutes < 0))) return false;
+      if (s.clubs.some(c => c.lastSeason !== undefined && (!c.lastSeason || !['season', 'rank', 'played', 'pts', 'ga'].every(k => Number.isInteger(c.lastSeason[k]) && c.lastSeason[k] >= 0)))) return false;
+      if (s.clubs.some(c=>c.marketSpending!==undefined&&(!c.marketSpending||!Number.isInteger(c.marketSpending.season)||c.marketSpending.season<0||!Number.isFinite(c.marketSpending.amount)||c.marketSpending.amount<0)))return false;
+      if (s.players.some(p => p.history !== undefined && (!Array.isArray(p.history) || p.history.some(h => !h || ['season', 'clubGames', 'appearances', 'minutes', 'goals', 'assists', 'cleanSheets'].some(k => h[k] !== undefined && (!Number.isFinite(h[k]) || h[k] < 0)))))) return false;
       const validPlayer = (p, academy = false) => Number.isInteger(p.id) && typeof p.name === 'string' && p.name.length < 100 && Number.isInteger(p.club) && p.club >= (academy ? -2 : -1) && p.club < CLUBS.length && ['GK', 'DF', 'MF', 'FW'].includes(p.pos) && ['age', 'atk', 'def', 'tech', 'pace', 'fitness', 'morale', 'injury', 'banned', 'yellows', 'goals', 'appearances', 'potential', 'contract', 'salary'].every(k => Number.isFinite(p[k]) && p[k] >= 0) && (!p.loan || (Number.isInteger(p.loan.owner) && p.loan.owner >= 0 && p.loan.owner < CLUBS.length));
       if (s.players.length < CLUBS.length * 22 || s.players.length > 35000 || new Set(s.players.map(p => p.id)).size !== s.players.length || !s.players.every(p => validPlayer(p)) || !s.academy.every(p => validPlayer(p, true)) || new Set([...s.players, ...s.academy].map(p => p.id)).size !== s.players.length + s.academy.length) return false;
       if (!s.leagues.every(l => typeof l.name === 'string' && typeof l.country === 'string' && typeof l.flag === 'string') || !s.news.every(n => typeof n.title === 'string' && typeof n.text === 'string') || !s.transfers.every(t => typeof t.text === 'string') || !s.ledger.every(l => Number.isFinite(l.amount) && typeof l.label === 'string') || !s.scouting.every(r => player(s, r.player) && Number.isFinite(r.remaining))) return false;
       if (!s.incoming.every(o => player(s, o.player)?.club === 0 && Number.isInteger(o.club) && o.club > 0 && o.club < CLUBS.length && Number.isFinite(o.cash) && o.cash >= 0 && /^\d+-\d+$/.test(o.id))) return false;
       const validMatchStats=m=>m.playerStats===undefined||m.playerStats&&Object.entries(m.playerStats).every(([id,stats])=>player(s,id)&&stats&&['minutes','starts','goals','assists','shots','onTarget'].every(k=>Number.isInteger(stats[k])&&stats[k]>=0)&&stats.minutes<=90&&stats.starts<=1&&stats.goals<=stats.onTarget&&stats.onTarget<=stats.shots);
       if(s?.pending?.enteredAt!==undefined&&(!s.pending.enteredAt||!Object.entries(s.pending.enteredAt).every(([id,n])=>player(s,id)&&Number.isInteger(n)&&n>=0&&n<=90)))return false;
-      const validMatch = m => m && validMatchStats(m) && [m.h, m.a].every(id => Number.isInteger(id) && id >= 0 && id < CLUBS.length) && ['hg', 'ag', 'homeXg', 'awayXg', 'possession', 'week', 'season'].every(k => Number.isFinite(m[k])) && Array.isArray(m.shots) && m.shots.length === 2 && m.shots.every(Number.isFinite) && Array.isArray(m.events) && m.events.every(e => player(s, e.player) && Number.isFinite(e.minute) && Number.isInteger(e.club) && e.club >= 0 && e.club < CLUBS.length && typeof e.name === 'string' && typeof e.text === 'string');
+      const validMatch = m => m && (m.neutral===undefined||typeof m.neutral==='boolean') && (m.income===undefined||m.income&&['broadcast','gate','prize'].every(k=>Number.isFinite(m.income[k])&&m.income[k]>=0)&&(!(m.neutral||m.h!==0)||m.income.gate===0)) && validMatchStats(m) && [m.h, m.a].every(id => Number.isInteger(id) && id >= 0 && id < CLUBS.length) && ['hg', 'ag', 'homeXg', 'awayXg', 'possession', 'week', 'season'].every(k => Number.isFinite(m[k])) && Array.isArray(m.shots) && m.shots.length === 2 && m.shots.every(Number.isFinite) && Array.isArray(m.events) && m.events.every(e => player(s, e.player) && Number.isFinite(e.minute) && Number.isInteger(e.club) && e.club >= 0 && e.club < CLUBS.length && typeof e.name === 'string' && typeof e.text === 'string');
       if (!s.results.every(validMatch) || (s.lastMatch && !validMatch(s.lastMatch)) || (s.pending && (!validMatch(s.pending.half) || s.pending.half.week !== s.week || !Array.isArray(s.pending.startLineup) || !s.pending.startLineup.every(id => player(s, id)?.club === 0) || !Array.isArray(s.pending.removed) || !Number.isInteger(s.pending.substitutions) || s.pending.substitutions < 0 || s.pending.substitutions > 5))) return false;
       const validClubId = id => Number.isInteger(id) && id >= 0 && id < CLUBS.length;
       if (s.clubs[0].league !== 0 || !s.leagues.every((l, li) => [1, 2, 3].includes(l.tier) && typeof l.nation === 'string' && s.clubs.filter(c => c.league === li).length === l.teams.length) || !s.cupResults.every(validMatch)) return false;
@@ -996,7 +1264,7 @@
       return s.clubs.every((c, i) => c.id === i && Number.isInteger(c.league) && c.league >= 0 && c.league < LEAGUES.length && typeof c.name === 'string' && typeof c.short === 'string' && /^#[a-f0-9]{6}$/i.test(c.color) && typeof c.stadium === 'string' && FORMATIONS[c.tactics?.formation] && ['mentality', 'line'].every(k => [-1, 0, 1].includes(c.tactics[k])) && ['press', 'tempo', 'width', 'passing', 'focus'].every(k => [0, 1, 2].includes(c.tactics[k])) && Array.isArray(c.lineup) && c.lineup.length === 11 && new Set(c.lineup).size === 11 && c.lineup.every(id => player(s, id)?.club === c.id) && Array.isArray(c.form) && c.form.every(x => ['W', 'D', 'L'].includes(x)) && ['pts', 'gf', 'ga', 'played', 'wins', 'draws', 'losses'].every(k => Number.isFinite(c[k])) && roster(s, i).length >= 11);
     } catch { return false; }
   }
-  const api = { defaultInstruction, tacticalPosition, setTarget, tacticPlan, DETAILS, POSITIONS, POSITION_GROUPS, SLOTS, INSTRUCTIONS, detail, upgradeSave, suitability, lineupScore, wageDemand, advanceMinute, setInstruction, matchPositions, autoWeek, filterPlayers, CLUBS, LEAGUES, FORMATIONS, newGame, roster, ovr, value, wage, payroll, windowOpen, player, available, autoLineup, standings, nextFixture, canRelease, setTactics, setLineup, askingPrice, deal, acceptOffer, toggleTransferList, getTransferOffers, sellPlayer, negotiateSale, contractTerminationPenalty, terminateContract, strength, startMatch, substitute, playWeek, nextSeason, validSave, promote, renew, scout, upgrade, talk, groupTable, asianOrder, worldClubOrder };
+  const api = { clubMarketCapacity, commercialBonus, homeGate, cupNeutral, cupMatchIncome, weeklyIncome, weeklyWages, boardGrant, summerOpen, advanceSummerWeek, transferWindowLabel, loyalty, outsideOffer, loanOffers, loanOut, exerciseLoanOption, aiContractMarket, marketWage, contractDemand, seniorMinutes, prospectFactor, upgradeCost, facilityUpkeep, cupMatchPrize, cupWinnerPrize, defaultInstruction, tacticalPosition, setTarget, tacticPlan, DETAILS, POSITIONS, POSITION_GROUPS, SLOTS, INSTRUCTIONS, detail, upgradeSave, suitability, lineupScore, wageDemand, advanceMinute, setInstruction, matchPositions, autoWeek, filterPlayers, CLUBS, LEAGUES, FORMATIONS, newGame, roster, ovr, value, wage, payroll, windowOpen, player, available, autoLineup, standings, nextFixture, canRelease, setTactics, setLineup, askingPrice, deal, acceptOffer, toggleTransferList, getTransferOffers, sellPlayer, negotiateSale, contractTerminationPenalty, terminateContract, strength, startMatch, substitute, playWeek, nextSeason, validSave, promote, renew, scout, upgrade, talk, groupTable, asianOrder, worldClubOrder };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.FM = api;
 })(globalThis);

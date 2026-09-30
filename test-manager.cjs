@@ -46,6 +46,7 @@ assert(G.substitute(s,startIds[1],bench.id).ok);assert(!G.substitute(s,bench.id,
 for(let i=45;i<90;i++)G.advanceMinute(s);
 assert.equal(G.advanceMinute(s),null);assert(s.pending.half.hg>=homeGoals);
 assert(s.pending.half.events.every(e=>e.minute>=1&&e.minute<=90));
+const matchClubs = new Map(s.players.map(p => [p.id, p.club]));
 const finished=copy(s.pending.half); G.playWeek(s);
 assert.equal(s.week,1);assert.equal(s.pending,null);assert.deepEqual(s.lastMatch,finished);assert(G.validSave(copy(s)));
 const replay=copy(snapshot);G.playWeek(snapshot);G.playWeek(replay);assert.deepEqual(snapshot,replay,'saved minute and RNG resume deterministically');
@@ -80,9 +81,9 @@ assert(filtered.length>0);filtered.forEach((p,i)=>{assert(p.age>=20&&p.age<=24&&
 // Recorded minutes respect substitutions; goals, shots and assists reconcile to the result.
 assert.equal(finished.playerStats[startIds[1]].minutes,45);assert.equal(finished.playerStats[bench.id].minutes,45);
 assert.equal(finished.playerStats[bench.id].starts,0);
-assert.equal(Object.entries(finished.playerStats).filter(([id])=>G.player(s,id).club===0).reduce((n,[,p])=>n+p.minutes,0),990);
+assert.equal(Object.entries(finished.playerStats).filter(([id])=>matchClubs.get(Number(id))===0).reduce((n,[,p])=>n+p.minutes,0),990);
 for(const [side,cid] of [finished.h,finished.a].entries()){
-  const stats=Object.entries(finished.playerStats).filter(([id])=>G.player(s,id).club===cid).map(([,p])=>p);
+  const stats=Object.entries(finished.playerStats).filter(([id])=>matchClubs.get(Number(id))===cid).map(([,p])=>p);
   assert.equal(stats.reduce((n,p)=>n+p.goals,0),side?finished.ag:finished.hg);
   assert.equal(stats.reduce((n,p)=>n+p.shots,0),finished.shots[side]);
   assert(stats.every(p=>p.shots>=p.onTarget&&p.onTarget>=p.goals));
