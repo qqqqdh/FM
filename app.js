@@ -92,13 +92,14 @@ function render() {
 function metric(label, value, detail, name) { return `<div class="metric"><div class="metric-top">${label}${icon(name)}</div><strong>${value}</strong><span>${detail}</span></div>`; }
 function leagueRounds(league) { return Math.max(...(league.groupSizes || [league.teams.length]).map(size => 2 * (size - 1))); }
 function overview(rank) {
+  const retirements = G.roster(state).filter(p => !p.loan && p.retirementRequestSeason !== undefined);
   const s = G.strength(state, 0), next = G.nextFixture(state), opponent = next ? state.clubs[next.find(x => x !== 0)] : null, finished = state.week >= state.totalWeeks, rest = !finished && !next, leagueEnded = !remainingLeagueGames(), leagueSize = state.leagues[0].teams.length;
   return `<section class="metrics">${metric('이적 예산', cash(state.budget), '자유롭게 설계하는 다음 영입', 'wallet')}${metric('리그 순위', `${state.week ? rank : '–'}<small> / ${leagueSize}</small>`, `${me().pts} 승점 · ${me().wins}승 ${me().draws}무 ${me().losses}패`, 'league')}${metric('스쿼드 전력', `${Math.round((s.attack + s.defense + s.control) / 3)}<small>OVR</small>`, `${G.roster(state).length}명의 선수 · 선발 및 전술 반영`, 'squad')}${metric('팀 컨디션', `${s.fitness}<small>%</small>`, s.fitness > 80 ? '좋은 몸 상태로 경기를 준비 중' : '로테이션과 압박 조절이 필요합니다', 'bolt')}</section>
   <div class="dashboard-top"><section class="match-hero"><div class="hero-top"><span class="live-label"><i></i>${opponent ? 'NEXT MATCH' : rest ? (leagueEnded ? 'LEAGUE COMPLETE' : 'REST WEEK') : 'SEASON COMPLETE'}</span><span>${esc(state.leagues[0].name)} · ${Math.min(state.week + 1, state.totalWeeks)}R</span></div>${opponent ? `<div class="hero-teams"><div>${badge(0, 'large')}<h2>${esc(me().name)}</h2><span>${next[0] === 0 ? 'HOME' : 'AWAY'}</span></div><div class="versus">VS<span>${dateLabel()}</span></div><div>${badge(opponent.id, 'large')}<h2>${esc(opponent.name)}</h2><span>${next[0] === 0 ? 'AWAY' : 'HOME'}</span></div></div><div class="hero-bottom"><span>${icon('tactics')}${esc(state.clubs[next[0]].stadium)}<b>·</b> 19:00 KICK-OFF</span><button class="light-button" data-action="advance">경기 준비${icon('arrow')}</button></div>` : rest ? `<div class="season-finish"><span class="trophy">${icon('calendar')}</span><h2>${leagueEnded ? '우리 팀 리그 일정 완료' : '이번 주는 휴식 주간'}</h2><p>${leagueEnded ? `${me().played}경기 완료 · 남은 컵 대회와 다른 리그 일정을 마무리하세요.` : '다음 리그 경기까지 휴식 주간을 한 번에 진행합니다.'}</p><button class="primary" data-action="advance">${leagueEnded ? '남은 시즌 일정 진행' : '다음 경기까지 진행'}${icon('arrow')}</button></div>` : `<div class="season-finish"><span class="trophy">${icon('league')}</span><h2>시즌 최종 ${rank}위</h2><p>${me().wins}승 ${me().draws}무 ${me().losses}패, ${me().pts}승점. 다음 이야기는 당신의 손에.</p><button class="primary" data-action="advance">다음 시즌 시작${icon('arrow')}</button></div>`}</section>
   <section class="panel tactic-preview"><div class="panel-head"><h2>우리 팀의 플레이</h2><button class="text-button" data-page="tactics">전술 수정 ${icon('arrow')}</button></div><div class="mini-tactics">${pitch(true)}<div class="tactic-summary"><span class="eyebrow">FORMATION</span><strong>${me().tactics.formation}</strong><span class="tactic-chip">${['수비적으로', '균형 잡힌 플레이', '공격적으로'][me().tactics.mentality + 1]}</span><dl><dt>압박 강도</dt><dd>${['낮음', '보통', '높음'][me().tactics.press]}</dd><dt>패스 템포</dt><dd>${['느리게', '보통', '빠르게'][me().tactics.tempo]}</dd></dl><span class="muted">${s.fitness < 75 ? '피로한 선수의 휴식을 권장합니다' : '우리만의 플레이를 완성하세요'}</span></div></div></section></div>
   <div class="dashboard-bottom"><section class="panel"><div class="panel-head"><h2>이적 레이더 <span class="count">SCOUTING</span></h2><button class="text-button" data-page="market">시장 전체 보기 ${icon('arrow')}</button></div><div class="scout-list">${recommendations().map(p => scoutCard(p)).join('')}</div><div class="panel-note">${icon('market')}선수 교환과 현금을 조합해 최적의 딜을 만들어보세요.</div></section>
   <section class="panel"><div class="panel-head"><h2>리그 테이블</h2><button class="text-button" data-page="league">전체 ${icon('arrow')}</button></div>${table(true)}</section></div>
-  ${cupStrip()}<section class="panel inbox"><div class="panel-head"><h2>감독의 인박스 <span class="count">${state.incoming.length + Math.min(state.news.length, 2)}</span></h2><span class="muted">구단의 최신 소식</span></div>${state.incoming.map(offerRow).join('')}${state.news.slice(0, 2).map(n => `<div class="news-row"><span class="news-icon">${icon(n.type === 'transfer' ? 'market' : n.type === 'match' ? 'tactics' : 'squad')}</span><div><strong>${esc(n.title)}</strong><p>${esc(n.text)}</p></div><span class="news-time">${n.week}R</span></div>`).join('')}</section>`;
+  ${cupStrip()}<section class="panel inbox"><div class="panel-head"><h2>감독의 인박스 <span class="count">${retirements.length + state.incoming.length + Math.min(state.news.length, 2)}</span></h2><span class="muted">구단의 최신 소식</span></div>${retirements.map(p => `<div class="news-row"><span class="news-icon">${icon('squad')}</span><div><strong>${esc(p.name)} · 은퇴 승인 요청</strong><p>${p.age}세 · 구단 승인 전까지 현역 유지</p><button class="secondary small" data-retirement="${p.id}">은퇴 요청 검토</button></div></div>`).join('')}${state.incoming.map(offerRow).join('')}${state.news.slice(0, 2).map(n => `<div class="news-row"><span class="news-icon">${icon(n.type === 'transfer' ? 'market' : n.type === 'match' ? 'tactics' : 'squad')}</span><div><strong>${esc(n.title)}</strong><p>${esc(n.text)}</p></div><span class="news-time">${n.week}R</span></div>`).join('')}</section>`;
 }
 function recommendations() { return state.players.filter(p => p.club !== 0).sort((a, b) => (G.ovr(b) - G.askingPrice(state, b.id) * .17) - (G.ovr(a) - G.askingPrice(state, a.id) * .17)).slice(0,30).filter(p=>G.canRelease(state,p.id)).slice(0, 3); }
 function scoutCard(p) { return `<button class="scout-card" data-negotiate="${p.id}"><span class="player-silhouette" style="--club:${(state.clubs[p.club]?.color || '#89949a')}"><span>${p.name.slice(0, 1)}</span><i>${esc(state.clubs[p.club]?.short || 'FA')}</i></span><div class="scout-player"><strong>${esc(p.name)} ${playerPosition(p)}</strong><span>${esc(state.clubs[p.club]?.name || '자유 계약')} · ${p.age}세</span><div><b>${cash(G.askingPrice(state, p.id))}</b><small>예상 요구액</small></div></div>${rating(p)}${icon('chevron')}</button>`; }
@@ -145,46 +146,63 @@ function leaguePage() {
   }).join('')}</div></section><section class="panel scorers"><div class="panel-head"><h2>득점 순위</h2>${icon('league')}</div>${state.players.filter(p => state.clubs[p.club]?.league === viewedLeague).sort((a, b) => b.goals - a.goals || G.ovr(b) - G.ovr(a)).slice(0, 8).map((p, i) => `<div class="scorer"><span>${i + 1}</span><div><strong>${esc(p.name)}</strong><small>${esc(state.clubs[p.club]?.name || '자유 계약')}</small></div><b>${p.goals}<small>골</small></b></div>`).join('')}</section></div>`;
 }
 function modal(content, cls = '') { const d = $('#modal'); d.className = cls; d.innerHTML = `<button class="modal-close" data-action="close" aria-label="닫기">${icon('close')}</button>${content}`; if (!d.open) d.showModal(); }
+function profileStatColumns(p) {
+  const common = [['apps','출전'], ['starts','선발'], ['minutes','출전 시간']];
+  if (p.pos === 'GK') return [['cleanSheets','클린시트'], ...common];
+  if (p.pos === 'DF') return [common[2], common[1], common[0], ['subIn','교체 출전']];
+  const attack = [['leagueGoals','리그 골'], ['assists','어시스트']];
+  if (p.pos === 'MF') attack.reverse();
+  return [...attack, ['points','공격포인트'], ['cupGoals','컵 골'], ...common];
+}
+function profileSeasonStatsUI(p) {
+  const st = playerStatsForSeason(p);
+  return `<section class="profile-season-stats"><span class="eyebrow">SEASON STATS (시즌 성적)</span><div class="detail-rows">${profileStatColumns(p).map(([key,label]) => `<p>${label}<b data-profile-stat="${key}">${st[key].toLocaleString()}${key === 'minutes' ? '분' : ['apps','starts','subIn','cleanSheets'].includes(key) ? '경기' : ''}</b></p>`).join('')}</div><p class="field-help">컵 골을 제외한 기록은 리그 기준입니다.${p.pos === 'GK' ? ' 클린시트는 60분 이상 출전한 팀 무실점 경기입니다.' : ''}</p></section>`;
+}
 function careerHistoryUI(p) {
   const history = p.history || [];
   if (!history.length) return '';
+  const columns = profileStatColumns(p);
   return `<div class="career-stats-section" style="margin-top:0.75rem">
     <span class="eyebrow" style="margin-bottom:0.25rem;display:block">CAREER HISTORY (지난 시즌 기록)</span>
     <div class="table-wrap" style="max-height:160px;overflow-y:auto">
       <table class="players-table" style="font-size:0.8rem">
         <thead>
           <tr>
-            <th>시즌</th><th>소속</th><th>출전(선발)</th><th>골(컵)</th><th>도움</th><th>공격P</th><th>출전 분</th>
+            <th scope="col">시즌</th><th scope="col">소속</th>${columns.map(([,label]) => `<th scope="col">${label}</th>`).join('')}
           </tr>
         </thead>
         <tbody>
-          ${history.slice().reverse().map(h => `<tr>
+          ${history.slice().reverse().map(h => {
+            const st = playerStatsForSeason(p, h.season);
+            const sourceKeys = {apps:'appearances',leagueGoals:'goals'};
+            return `<tr>
             <td>${h.season}</td>
             <td>${esc(h.clubName || '자유 계약')}</td>
-            <td>${h.appearances}(${h.starts || 0})</td>
-            <td>${h.goals + (h.cupGoals || 0)}${h.cupGoals ? `(${h.cupGoals})` : ''}</td>
-            <td>${h.assists || 0}</td>
-            <td>${(h.goals + (h.cupGoals || 0)) + (h.assists || 0)}</td>
-            <td>${h.minutes ? h.minutes.toLocaleString() + '분' : '-'}</td>
-          </tr>`).join('')}
+            ${columns.map(([key]) => {
+              const known = key === 'points' ? h.goals !== undefined && h.assists !== undefined : key === 'subIn' ? h.subIn !== undefined || h.appearances !== undefined && h.starts !== undefined : h[sourceKeys[key] || key] !== undefined;
+              return `<td data-history-stat="${key}">${known ? st[key].toLocaleString() + (key === 'minutes' ? '분' : '') : '—'}</td>`;
+            }).join('')}
+          </tr>`; }).join('')}
         </tbody>
       </table>
     </div>
+    <p class="field-help">${['MF','FW'].includes(p.pos) ? '컵 골은 별도 집계하며 공격포인트는 리그 골 + 어시스트입니다.' : '모든 기록은 리그 기준입니다.'} —는 저장된 기록이 없는 항목입니다.</p>
   </div>`;
 }
 function clubRoster(id) {
   const club=state.clubs[Number(id)];if(!club)return;
   const squad=G.roster(state,club.id).slice().sort((a,b)=>Object.keys(G.POSITION_GROUPS).indexOf(a.pos)-Object.keys(G.POSITION_GROUPS).indexOf(b.pos)||G.ovr(b)-G.ovr(a));
   const capacity=G.clubMarketCapacity(state,club), starters=new Set(club.lineup);
-  modal(`<span class="eyebrow">CLUB ROSTER</span><h2>${esc(club.name)} 로스터</h2><p class="modal-desc">${esc(state.leagues[club.league].name)} · ${club.tactics.formation} · ${squad.length}/25명<br>평균 OVR ${(squad.reduce((n,p)=>n+G.ovr(p),0)/Math.max(1,squad.length)).toFixed(1)} · 선수 주급 합계 ${squad.reduce((n,p)=>n+G.wage(p),0).toFixed(2)}억${club.id!==0?`<br>남은 시즌 영입 예산 ${capacity.budget.toFixed(2)}억 · 선수 1명 주급 한도 ${capacity.wage.toFixed(2)}억`:''}</p><p class="field-help">${Object.entries(G.clubFacilities(state, club.id)).map(([key,level])=>`${({training:'훈련',youth:'아카데미',recovery:'회복',stadium:'구장'})[key]} LV.${level}/${G.upgradeLimit('facilities',key)}`).join(' · ')}${club.id ? '<br>매 시즌 남은 예산의 25% 안에서 시설 한 곳 자동 개선 · 유지비 없음' : ''}</p><div class="table-wrap"><table id="club-roster-table"><thead><tr><th>선수</th><th>포지션</th><th>나이</th><th>OVR</th><th>주급</th><th>계약 만료</th><th>골 / 도움</th><th>기용·상태</th></tr></thead><tbody>${squad.map(p=>`<tr><td><button class="player-name" data-profile="${p.id}">${esc(p.name)}</button></td><td>${playerPosition(p)}</td><td>${p.age}</td><td>${rating(p)}</td><td>${G.wage(p).toFixed(2)}억</td><td>${p.contract}년</td><td>${p.goals} / ${p.leagueStats?.assists||0}</td><td>${starters.has(p.id)?'선발':'벤치'}${p.loan?' · 임대':''}${p.injury?' · 부상':p.banned?' · 출장 정지':''}</td></tr>`).join('')}</tbody></table></div><p class="field-help">현재 소속 1군 명단입니다. 선수 이름을 누르면 상세 능력과 커리어 기록을 볼 수 있습니다.</p>`,'club-roster-modal');
+  modal(`<span class="eyebrow">CLUB ROSTER</span><h2>${esc(club.name)} 로스터</h2><p class="modal-desc">${esc(state.leagues[club.league].name)} · ${club.tactics.formation} · ${squad.length}/25명<br>평균 OVR ${(squad.reduce((n,p)=>n+G.ovr(p),0)/Math.max(1,squad.length)).toFixed(1)} · 선수 주급 합계 ${squad.reduce((n,p)=>n+G.wage(p),0).toFixed(2)}억${club.id!==0?`<br>남은 시즌 영입 예산 ${capacity.budget.toFixed(2)}억 · 선수 1명 주급 한도 ${capacity.wage.toFixed(2)}억<br>기본 예산 ${capacity.baseBudget.toFixed(2)}억 + 이적 수입 ${capacity.income.toFixed(2)}억 − 영입·시설 지출 ${capacity.spent.toFixed(2)}억`:''}</p><p class="field-help">${Object.entries(G.clubFacilities(state, club.id)).map(([key,level])=>`${({training:'훈련',youth:'아카데미',recovery:'회복',stadium:'구장'})[key]} LV.${level}/${G.upgradeLimit('facilities',key)}`).join(' · ')}${club.id ? '<br>매 시즌 남은 예산의 25% 안에서 시설 한 곳 자동 개선 · 유지비 없음' : ''}</p><div class="table-wrap"><table id="club-roster-table"><thead><tr><th>선수</th><th>포지션</th><th>나이</th><th>OVR</th><th>주급</th><th>계약 만료</th><th>골 / 도움</th><th>기용·상태</th></tr></thead><tbody>${squad.map(p=>`<tr><td><button class="player-name" data-profile="${p.id}">${esc(p.name)}</button></td><td>${playerPosition(p)}</td><td>${p.age}</td><td>${rating(p)}</td><td>${G.wage(p).toFixed(2)}억</td><td>${p.contract}년</td><td>${p.goals} / ${p.leagueStats?.assists||0}</td><td>${starters.has(p.id)?'선발':'벤치'}${p.loan?' · 임대':''}${p.injury?' · 부상':p.banned?' · 출장 정지':''}</td></tr>`).join('')}</tbody></table></div><p class="field-help">현재 소속 1군 명단입니다. 선수 이름을 누르면 상세 능력과 커리어 기록을 볼 수 있습니다.</p>`,'club-roster-modal');
 }
 function profile(id) {
   const p = G.player(state, id);
-  modal(`<span class="eyebrow">PLAYER PROFILE</span><div class="profile-header"><span class="profile-avatar">${p.name[0]}</span><div><h2>${esc(p.name)}</h2><p>${esc(state.clubs[p.club]?.name || '자유 계약')} · ${p.age}세 ${playerPosition(p)}</p></div>${rating(p)}</div>${p.club>=0?`<button class="secondary full" data-club-roster="${p.club}">소속 구단 로스터 보기</button>`:''}${playerDetailsUI(p)}<div class="detail-rows"><p>시장 가치 <b>${cash(G.value(p))}</b></p><p>주급 <b>${G.wage(p).toFixed(2)}억</b></p><p>컨디션 <b>${p.fitness}%</b></p><p>시즌 득점 <b>${p.goals}골 · ${p.appearances}경기</b></p><p>사기 / 계약 만료<b>${p.morale}% / ${p.contract}년</b></p><p>상태<b>${p.injury ? '부상 '+p.injury+'주' : p.banned ? '출장 정지' : '출전 가능'}${p.loan?' · 임대 중':''}</b></p></div>${careerHistoryUI(p)}${profileActions(p)}${p.club !== 0 ? `<button class="primary full" data-negotiate="${p.id}" ${p.loan || !G.windowOpen(state) && p.club !== -1 ? 'disabled' : ''}>이적 협상 시작${icon('arrow')}</button>` : `<button class="primary full" data-action="go-tactics">전술 보드에서 기용하기${icon('arrow')}</button>`}`);
+  modal(`<span class="eyebrow">PLAYER PROFILE</span><div class="profile-header"><span class="profile-avatar">${p.name[0]}</span><div><h2>${esc(p.name)}</h2><p>${esc(p.retired ? '은퇴' : state.clubs[p.club]?.name || '자유 계약')} · ${p.age}세 ${playerPosition(p)}</p></div>${rating(p)}</div>${p.club>=0?`<button class="secondary full" data-club-roster="${p.club}">소속 구단 로스터 보기</button>`:''}${playerDetailsUI(p)}<div class="detail-rows"><p>시장 가치 <b>${cash(G.value(p))}</b></p><p>주급 <b>${G.wage(p).toFixed(2)}억</b></p><p>컨디션 <b>${p.fitness}%</b></p><p>사기 / 계약 만료<b>${p.morale}% / ${p.contract}년</b></p><p>상태<b>${p.retired ? '은퇴' : p.retirementRequestSeason !== undefined ? '은퇴 승인 대기' : p.injury ? '부상 '+p.injury+'주' : p.banned ? '출장 정지' : '출전 가능'}${p.loan?' · 임대 중':''}</b></p></div>${profileSeasonStatsUI(p)}${careerHistoryUI(p)}${profileActions(p)}${p.retired ? '' : p.club !== 0 ? `<button class="primary full" data-negotiate="${p.id}" ${p.loan || !G.windowOpen(state) && p.club !== -1 ? 'disabled' : ''}>이적 협상 시작${icon('arrow')}</button>` : `<button class="primary full" data-action="go-tactics">전술 보드에서 기용하기${icon('arrow')}</button>`}`);
 }
 function negotiate(id) {
   const p = G.player(state, id);
   if (state.pending) { toast('진행 중인 경기를 먼저 마쳐 주세요.'); return; }
+  if (p.retired) { toast('은퇴한 선수는 영입할 수 없습니다.'); return; }
   if (p.club === 0) return;
   if (p.loan) { toast('임대 중인 선수는 합의된 완전이적 옵션으로만 영입할 수 있습니다.'); return; }
   if (!G.windowOpen(state) && p.club !== -1) { toast(G.transferWindowLabel(state)); return; }
@@ -314,9 +332,10 @@ function roleControls() {
   return `<div class="role-controls"><div class="panel-head"><h2>선수별 임무</h2><span class="muted">공격 / 지원 / 수비</span></div>${me().lineup.map((id, i) => { const p = G.player(state, id); return `<div class="role-row"><span>${posTag(G.SLOTS[me().tactics.formation][i])} ${esc(p.name)}</span><select data-role-slot="${i}" aria-label="${esc(p.name)} 임무">${[['defend', '수비'], ['balanced', '지원'], ['attack', '공격']].map(([v, n]) => `<option value="${v}" ${state.roles[i] === v ? 'selected' : ''}>${n}</option>`).join('')}</select><button class="text-button" data-instructions="${i}">움직임 지시</button></div>`; }).join('')}<label class="field-label" for="captain">주장 선임 <span>선발 출전 시 팀 전력 보너스</span></label><select id="captain">${G.roster(state).map(p => `<option value="${p.id}" ${state.captain === p.id ? 'selected' : ''}>${esc(p.name)} · ${p.age}세</option>`).join('')}</select><div class="preset-row"><button class="secondary small" data-preset="possession">점유율 축구</button><button class="secondary small" data-preset="counter">역습 축구</button><button class="secondary small" data-preset="press">강한 압박</button></div></div>`;
 }
 function profileActions(p) {
+  if (p.retired) return '<p class="tip">은퇴한 선수입니다. 선수 기록은 계속 열람할 수 있습니다.</p>';
   if (p.club === 0) {
     const isListed = state.transferList?.includes(p.id) || p.transferListed;
-    return `<div class="profile-action-grid"><button class="secondary" data-renew="${p.id}" ${p.loan ? 'disabled' : ''}>계약 협상</button><button class="secondary" data-talk="${p.id}">개인 면담</button><button class="secondary" data-transfer-list="${p.id}" ${p.loan ? 'disabled' : ''}>${isListed ? '이적 명단 해제' : '이적 명단 등록'}</button><button class="secondary" data-sell="${p.id}" ${(!G.windowOpen(state) || p.loan) ? 'disabled' : ''}>선수 판매</button>${!p.loan ? `<button class="secondary" data-loan-out="${p.id}" ${!G.windowOpen(state)?'disabled':''}>임대 보내기</button>` : p.loan.purchasePrice!=null ? `<button class="primary" data-buy-loan="${p.id}" ${!G.windowOpen(state)?'disabled':''}>완전 영입 · ${p.loan.purchasePrice}억</button>` : ''}</div>${p.loan?`<p class="field-help">${esc(state.clubs[p.loan.owner].name)}에서 임대 · ${p.loan.until}년 복귀 · ${p.loan.purchasePrice!=null?'합의된 옵션 '+p.loan.purchasePrice+'억':'완전이적 옵션 없음'}</p>`:''}`;
+    return `${p.retirementRequestSeason !== undefined && !p.loan ? `<button class="primary full" data-retirement="${p.id}">은퇴 승인 요청 검토</button>` : ''}<div class="profile-action-grid"><button class="secondary" data-renew="${p.id}" ${p.loan ? 'disabled' : ''}>계약 협상</button><button class="secondary" data-talk="${p.id}">개인 면담</button><button class="secondary" data-transfer-list="${p.id}" ${p.loan ? 'disabled' : ''}>${isListed ? '이적 명단 해제' : '이적 명단 등록'}</button><button class="secondary" data-sell="${p.id}" ${(!G.windowOpen(state) || p.loan) ? 'disabled' : ''}>선수 판매</button>${!p.loan ? `<button class="secondary" data-loan-out="${p.id}" ${!G.windowOpen(state)?'disabled':''}>임대 보내기</button>` : p.loan.purchasePrice!=null ? `<button class="primary" data-buy-loan="${p.id}" ${!G.windowOpen(state)?'disabled':''}>완전 영입 · ${p.loan.purchasePrice}억</button>` : ''}</div>${p.loan?`<p class="field-help">${esc(state.clubs[p.loan.owner].name)}에서 임대 · ${p.loan.until}년 복귀 · ${p.loan.purchasePrice!=null?'합의된 옵션 '+p.loan.purchasePrice+'억':'완전이적 옵션 없음'}</p>`:''}`;
   }
   if(p.loan?.owner===0)return `<div class="scout-report"><b>우리 팀 소속 · ${p.loan.academy?'유스':'1군'} 임대</b><span>${p.loan.until}년 복귀 · 충성도 ${G.loyalty(state,p)}/80 · ${p.loan.purchasePrice!=null?'합의된 완전이적 옵션 '+p.loan.purchasePrice+'억 (상대 구단이 행사 결정)':'완전이적 옵션 없음'}</span></div>`;
   const r = state.scouting.find(x => x.player === p.id);
@@ -409,8 +428,20 @@ function sellModal(id) {
   modal(`<span class="eyebrow">TRANSFER SALE</span><h2>${esc(p.name)} 선수 매각</h2><div class="negotiation-player">${badge(0)}<div><strong>${esc(p.name)} ${playerPosition(p)}</strong><span>${esc(me().name)} · ${p.age}세 · ${rating(p)}</span></div></div><div class="detail-rows"><p>시장 가치<b>${cash(val)}</b></p><p>권장 이적료<b>${cash(asking)}</b></p><p>현재 상태<b>${state.transferList?.includes(p.id) || p.transferListed ? '이적 명단 등록' : '일반'}</b></p></div><div style="margin-top:1.2rem"><h3 style="font-size:0.95rem;margin-bottom:0.6rem">영입 관심 구단 제안</h3><div style="display:flex;flex-direction:column;gap:0.5rem">${!offers.length?'<p class="empty-state">현재 조건에 맞는 관심 구단이 없습니다.<span>이적 명단에 등록한 뒤 다음 주에 다시 확인하세요.</span></p>':''}${offers.map(o => `<div class="news-row sale-offer" style="padding:0.75rem 1rem;display:flex;align-items:center;justify-content:space-between"><div style="display:flex;align-items:center;gap:0.75rem">${badge(o.club, 'tiny')}<div><button class="player-name" data-club-roster="${o.club}">${esc(o.clubName)} · 로스터 보기</button><small style="display:block;color:var(--muted)">${esc(o.leagueName)}</small><small style="display:block;color:var(--muted)">${esc(o.reason)} · 제안 주급 ${o.salary.toFixed(2)}억</small></div></div><div style="display:flex;align-items:center;gap:0.75rem"><b class="success-text" style="font-size:1.05rem">${cash(o.cash)}</b><button class="primary small" data-accept-sell="${o.player}" data-buyer="${o.club}" data-cash="${o.cash}">즉시 매각</button></div></div>`).join('')}</div></div>${offers.length?`<form id="sell-form" data-player="${p.id}" style="margin-top:1.2rem;padding-top:1rem;border-top:1px solid var(--border)"><h3 style="font-size:0.95rem;margin-bottom:0.6rem">희망 이적료 협상 제안</h3><label class="field-label" for="sell-club">협상 대상 구단</label><select id="sell-club" name="club" required>${offers.map(o => `<option value="${o.club}">${esc(o.clubName)} (${esc(o.leagueName)})</option>`).join('')}</select><label class="field-label" for="sell-cash">제안할 이적료 (억 원)</label><input id="sell-cash" name="cash" type="number" min="1" step="0.5" value="${asking}" required><p class="field-help">상대 구단이 이적료를 검토하고 수락하거나 역제안을 보냅니다. 유스의 시장 가치에는 누적 실전 경험이 반영됩니다.</p><div id="sell-feedback" role="status"></div><button type="submit" class="secondary full">이적료 협상 보내기${icon('arrow')}</button></form>`:''}<p class="field-help">구단 이름을 누르면 상대 로스터를 볼 수 있습니다. 제안은 포지션 수요·이적 예산·주급 한도·선수 이적 의향을 반영하며, 최종 수락 시 다시 확인합니다.</p>`);
 }
 function managementResult(r) { if (r.ok) { save(); render(); } toast(r.message); }
+function retirementModal(id) {
+  const p = G.player(state, id);
+  if (!p || p.club !== 0 || p.loan || p.retirementRequestSeason === undefined) return;
+  const canApprove = !state.pending && G.canRelease(state, id);
+  modal(`<span class="eyebrow">RETIREMENT REQUEST</span><h2>${esc(p.name)} 은퇴 승인 요청</h2><p class="modal-desc">${p.age}세 · ${p.retirementRequestSeason} 시즌 요청 · 구단 승인 대기</p><p>승인하면 즉시 은퇴하며 주급 지급이 종료됩니다. 별도 위약금은 없고, 선수 기록은 보존됩니다. 결정하기 전까지 선수는 현역으로 남습니다.</p><p class="field-help">거절하면 다음 시즌까지 은퇴 요청을 유예합니다. 계약 만료와 이적은 기존 규칙대로 처리됩니다. 임대 중에는 은퇴를 처리하지 않습니다.</p>${!canApprove?`<p class="warning-text">${state.pending?'진행 중인 경기를 먼저 마쳐 주세요.':'최소 스쿼드와 포지션 인원을 유지할 수 있도록 대체 선수를 먼저 확보해 주세요.'}</p>`:''}<div class="modal-actions"><button class="secondary" data-retirement-defer="${p.id}" ${state.pending?'disabled':''}>거절 · 다음 시즌까지 유예</button><button class="primary" data-retirement-approve="${p.id}" ${canApprove?'':'disabled'}>은퇴 승인</button></div>`);
+}
 document.addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b || b.disabled) return;
+  if (b.dataset.retirement) retirementModal(Number(b.dataset.retirement));
+  if (b.dataset.retirementApprove || b.dataset.retirementDefer) {
+    const r = G.resolveRetirement(state, Number(b.dataset.retirementApprove || b.dataset.retirementDefer), !!b.dataset.retirementApprove);
+    if (r.ok) closeModal();
+    managementResult(r);
+  }
   if (b.dataset.pickNation !== undefined) { chosenNation = b.dataset.pickNation; chosenLeague = G.LEAGUES.findIndex(l => l.country === chosenNation && l.tier === 1); careerPicker(); }
   if (b.dataset.pickDivision !== undefined) { chosenLeague = Number(b.dataset.pickDivision); chosenNation = G.LEAGUES[chosenLeague]?.country || chosenNation; careerPicker(); }
   if (b.dataset.startCareer !== undefined) { state = G.newGame(Date.now(), Number(b.dataset.startCareer)); state.careerSelected = true; page = 'overview'; viewedLeague = 0; marketLeague = 'ALL'; marketQuery = ''; closeModal(); save(); render(); toast(`${me().name}의 새로운 감독으로 부임했습니다.`); }

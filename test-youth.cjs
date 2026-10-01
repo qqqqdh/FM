@@ -5,10 +5,11 @@ const fs = require('node:fs');
 const G = require('./engine.js');
 const s = process.argv[2] ? JSON.parse(fs.readFileSync(process.argv[2], 'utf8')) : G.newGame(42);
 if (!process.argv[2]) { s.season = 2035; s.players.forEach(p => { p.age += 9; }); }
-const own = JSON.stringify(G.roster(s)), budget = s.budget;
+const squadSnapshot = () => JSON.stringify(G.roster(s).map(({retirementRequestSeason, ...p}) => p));
+const own = squadSnapshot(), budget = s.budget;
 const ids = new Set(s.players.map(p => p.id));
 G.upgradeSave(s);
-assert.equal(JSON.stringify(G.roster(s)), own, 'preserve our squad');
+assert.equal(squadSnapshot(), own, 'preserve our squad apart from retirement requests');
 assert.equal(s.budget, budget);
 const fresh = s.players.filter(p => !ids.has(p.id));
 assert.equal(fresh.length, (s.clubs.length - 1) * 2);

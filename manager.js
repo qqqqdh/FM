@@ -5,6 +5,7 @@ const marketFilters = {...marketDefaults};
 let compareIds=[], tacticSlot=1, tacticPhase='attack', tacticPlanSlot=0;
 let squadView='ability', squadPos='ALL', squadSort='position', squadQuery='', squadAvailable=false, squadSeason='current';
 let squadSortAsc=false, squadStatsDetailed=false;
+const squadPrimaryStats = {GK:'cleanSheets', DF:'minutes', MF:'assists', FW:'goals'};
 const footNames = {left:'왼발',right:'오른발',both:'양발'};
 function playerPosition(p) { G.detail(p); return `<span class="position ${p.pos.toLowerCase()}" title="${G.POSITIONS[p.position]}">${p.position}</span><small> ${footNames[p.foot]}</small>`; }
 function playerDetailsUI(p) {
@@ -191,9 +192,10 @@ function squadPlayers() {
   const score = p => {
     if (squadView === 'stats') {
       const st = playerStatsForSeason(p, squadSeason);
-      if (squadSort === 'goals') return st.leagueGoals;
-      if (squadSort === 'p90') return st.minutes ? st.leagueGoals * 90 / st.minutes : -1;
-      if (Object.hasOwn(st, squadSort)) return st[squadSort];
+      const key = squadSort === 'role' ? squadPrimaryStats[p.pos] : squadSort;
+      if (key === 'goals') return st.leagueGoals;
+      if (key === 'p90') return st.minutes ? st.leagueGoals * 90 / st.minutes : -1;
+      if (Object.hasOwn(st, key)) return st[key];
       return G.ovr(p);
     }
     return squadSort === 'goals' ? p.goals : squadSort === 'assists' ? p.leagueStats?.assists || 0 : squadSort === 'minutes' ? p.leagueStats?.minutes || 0 : squadSort === 'fitness' ? p.fitness : squadSort === 'wage' ? G.wage(p) : G.ovr(p);
@@ -211,7 +213,7 @@ function squadScreen() {
 
   const viewOptions = { ability: '능력·컨디션', stats: '시즌 성적 (기록)', contract: '계약 & 재정' };
   const sortOptions = squadView === 'stats'
-    ? { goals: '리그 득점', assists: '리그 도움', points: '리그 공격포인트', minutes: '출전 시간', apps: '출전 경기', starts: '선발 경기', cupGoals: '컵 득점', p90: '리그 90분당 골', shots: '슈팅', onTarget: '유효슈팅', cleanSheets: 'GK 클린시트', position: '포지션', ovr: '오버롤' }
+    ? { role: '포지션별 주요 성적', goals: '리그 득점', assists: '리그 어시스트', points: '리그 공격포인트', minutes: '출전 시간', apps: '출전 경기', starts: '선발 경기', subIn: '교체 출전', cupGoals: '컵 득점', p90: '리그 90분당 골', shots: '슈팅', onTarget: '유효슈팅', cleanSheets: 'GK 클린시트', position: '포지션', ovr: '오버롤' }
     : squadView === 'contract'
     ? { wage: '주급 높은 순', ovr: '오버롤 높은 순', position: '포지션' }
     : { position: '포지션', ovr: '오버롤 높은 순', fitness: '체력 높은 순', wage: '주급 높은 순' };
@@ -236,7 +238,7 @@ function squadScreen() {
     ${squadView === 'stats' ? `
       <div class="squad-season-bar">
         <label>시즌 선택 <select data-squad-option="season">${selectOptions(seasonOptions, squadSeason)}</select></label>
-        <label class="squad-detail-toggle"><input type="checkbox" data-squad-option="detailed" ${squadStatsDetailed ? 'checked' : ''}> 상세 기록 표시 <span class="muted">슈팅 · 유효슈팅 · 90분당 골</span></label>
+        <label class="squad-detail-toggle"><input type="checkbox" data-squad-option="detailed" ${squadStatsDetailed ? 'checked' : ''}> 상세 기록 표시 <span class="muted">포지션별 추가 기록</span></label>
       </div>
       <div class="squad-season-summary" aria-label="현재 스쿼드의 선택 시즌 기록 합계">
         <div><span>리그 득점</span><strong>${totalTeamGoals}<small>골</small></strong></div>
@@ -260,17 +262,23 @@ function squadTable() {
   if (squadView === 'stats') {
     if (!ps.length) return '<p class="empty-state">해당 조건에 맞는 선수가 없습니다.</p>';
     const common = [['apps', '출전'], ['starts', '선발'], ['minutes', '출전 시간']];
-    const attack = [['goals', '리그 골'], ['assists', '도움'], ['points', '공격포인트'], ['cupGoals', '컵 골']];
+    const attack = [['goals', '리그 골'], ['assists', '어시스트'], ['points', '공격포인트'], ['cupGoals', '컵 골']];
     const extra = [['shots', '슈팅'], ['onTarget', '유효슈팅'], ['p90', '90분당 골']];
-    const groups = [[false, '필드 선수'], [true, '골키퍼']];
-    return `<p class="squad-stat-help">열 제목을 누르면 정렬됩니다 · ${squadSort === 'position' ? '포지션 순' : squadSortAsc ? '낮은 순 ↑' : '높은 순 ↓'} · 컵 골을 제외한 모든 기록은 리그 기준</p>` + groups.map(([keeper, title]) => {
-      const players = ps.filter(p => (p.pos === 'GK') === keeper);
+    const groups = [
+      ['GK', '골키퍼', [['cleanSheets', '클린시트'], ...common], [['subIn', '교체 출전']]],
+      ['DF', '수비수', [common[2], common[1], common[0], ['subIn', '교체 출전']], [...attack, ...extra]],
+      ['MF', '미드필더', [attack[1], attack[0], ...attack.slice(2), ...common], extra],
+      ['FW', '포워드', [...attack, ...common], extra]
+    ];
+    return `<p class="squad-stat-help">열 제목을 누르면 정렬됩니다 · ${squadSort === 'role' ? '포지션별 주요 성적 · ' : ''}${squadSort === 'position' ? '포지션 순' : squadSortAsc ? '낮은 순 ↑' : '높은 순 ↓'} · 컵 골을 제외한 모든 기록은 리그 기준</p>` + groups.map(([pos, title, basic, detailed]) => {
+      const players = ps.filter(p => p.pos === pos);
       if (!players.length) return '';
-      const columns = keeper ? [...common, ['cleanSheets', '클린시트'], ...(squadStatsDetailed ? [...attack, ...extra] : [])] : [...common, ...attack, ...(squadStatsDetailed ? extra : [])];
-      return `<section class="squad-stat-group"><h3>${title} <span>${players.length}명</span></h3><div class="table-wrap squad-stats-scroll" tabindex="0" role="region" aria-label="${title} 시즌 기록"><table class="players-table squad-stats-table"><caption class="sr-only">${squadSeason === 'current' ? state.season : squadSeason} 시즌 ${title} 기록</caption><thead><tr><th scope="col">선수 / 포지션</th>${columns.map(([key, label]) => `<th scope="col" aria-sort="${squadSort === key ? squadSortAsc ? 'ascending' : 'descending' : 'none'}"><button data-squad-sort="${key}" aria-label="${label} ${squadSort === key && !squadSortAsc ? '낮은' : '높은'} 순 정렬">${label}<span aria-hidden="true">${squadSort === key ? squadSortAsc ? '↑' : '↓' : '↕'}</span></button></th>`).join('')}</tr></thead><tbody>${players.map(p => {
+      const columns = [...basic, ...(squadStatsDetailed ? detailed : [])];
+      const activeSort = squadSort === 'role' ? squadPrimaryStats[pos] : squadSort;
+      return `<section class="squad-stat-group"><h3>${title} <span>${players.length}명</span></h3><div class="table-wrap squad-stats-scroll" tabindex="0" role="region" aria-label="${title} 시즌 기록"><table class="players-table squad-stats-table"><caption class="sr-only">${squadSeason === 'current' ? state.season : squadSeason} 시즌 ${title} 기록</caption><thead><tr><th scope="col">선수 / 포지션</th>${columns.map(([key, label]) => `<th scope="col" aria-sort="${activeSort === key ? squadSortAsc ? 'ascending' : 'descending' : 'none'}"><button data-squad-sort="${key}" aria-label="${label} ${activeSort === key && !squadSortAsc ? '낮은' : '높은'} 순 정렬">${label}<span aria-hidden="true">${activeSort === key ? squadSortAsc ? '↑' : '↓' : '↕'}</span></button></th>`).join('')}</tr></thead><tbody>${players.map(p => {
         const st = playerStatsForSeason(p, squadSeason);
         const values = {...st, goals: st.leagueGoals, minutes: st.minutes.toLocaleString() + '분', p90: st.minutes ? (st.leagueGoals * 90 / st.minutes).toFixed(2) : '—'};
-        return `<tr data-stat-player="${p.id}"><td><button class="player-name" data-profile="${p.id}" title="${esc(p.name)}">${esc(p.name)}</button><small><span class="position ${p.pos.toLowerCase()}">${p.position}</span> ${G.POSITIONS[p.position]}</small></td>${columns.map(([key]) => `<td data-stat="${key}" class="${squadSort === key ? 'stat-sorted' : ''} ${values[key] === 0 ? 'stat-zero' : ''}">${values[key]}</td>`).join('')}</tr>`;
+        return `<tr data-stat-player="${p.id}"><td><button class="player-name" data-profile="${p.id}" title="${esc(p.name)}">${esc(p.name)}</button><small><span class="position ${p.pos.toLowerCase()}">${p.position}</span> ${G.POSITIONS[p.position]}</small></td>${columns.map(([key]) => `<td data-stat="${key}" class="${activeSort === key ? 'stat-sorted' : ''} ${values[key] === 0 ? 'stat-zero' : ''}">${values[key]}</td>`).join('')}</tr>`;
       }).join('')}</tbody></table></div></section>`;
     }).join('') + `<p class="panel-note">${ps.length}명 표시 · 공격포인트 = 리그 골 + 도움 · 클린시트 = 60분 이상 출전한 골키퍼의 팀 무실점 경기<br>선수 이름을 누르면 프로필을 확인할 수 있습니다. 과거 저장에 누락된 세부 기록은 소급되지 않습니다.</p>`;
   }
@@ -311,7 +319,7 @@ function comparePlayers() {
 function repaintTactics() { render(); if($('#modal').open && !$('#live-minute') && $('#modal [data-target-axis]'))instructionModal(Number($('#modal [data-target-slot]').dataset.targetSlot)); }
 document.addEventListener('click',e=>{
  const b=e.target.closest('button'); if(b?.disabled)return;
- if(b?.dataset.squadSort){const key=b.dataset.squadSort;squadSortAsc=squadSort===key?!squadSortAsc:false;squadSort=key;const region=b.closest('.squad-stats-scroll'),left=region.scrollLeft,label=region.getAttribute('aria-label');render();const next=[...document.querySelectorAll('.squad-stats-scroll')].find(x=>x.getAttribute('aria-label')===label);if(next){next.scrollLeft=left;next.querySelector(`[data-squad-sort="${key}"]`)?.focus({preventScroll:true});}return;}
+ if(b?.dataset.squadSort){const key=b.dataset.squadSort;squadSortAsc=b.closest('th').getAttribute('aria-sort')==='descending';squadSort=key;const region=b.closest('.squad-stats-scroll'),left=region.scrollLeft,label=region.getAttribute('aria-label');render();const next=[...document.querySelectorAll('.squad-stats-scroll')].find(x=>x.getAttribute('aria-label')===label);if(next){next.scrollLeft=left;next.querySelector(`[data-squad-sort="${key}"]`)?.focus({preventScroll:true});}return;}
  if(b?.dataset.targetPlayer!==undefined){tacticSlot=Number(b.dataset.targetPlayer);render();return;}
  if(b?.dataset.targetView){tacticPhase=b.dataset.targetView;render();}
  if(b?.dataset.resetTarget!==undefined){const slot=Number(b.dataset.resetTarget);G.setTarget(state,slot,'attack',null,null);G.setTarget(state,slot,'defend',null,null);save();render();}
@@ -327,6 +335,6 @@ document.addEventListener('change',e=>{
  if(el.id==='tactic-slot'){tacticSlot=Number(el.value);render();}
  if(el.id==='tactic-plan-slot'){tacticPlanSlot=Number(el.value);render();}
  if(el.dataset.targetAxis){const slot=Number(el.dataset.targetSlot),phase=el.dataset.targetPhase,p=G.tacticalPosition(state,0,slot,phase);p[el.dataset.targetAxis]=Number(el.value);if(!G.setTarget(state,slot,phase,p.x,p.y))toast('위치는 5~95 사이로 지정하세요.');else save();repaintTactics();paintLive();}
- if(el.dataset.squadOption){const k=el.dataset.squadOption;if(k==='view'){squadView=el.value;squadSort=squadView==='stats'?'goals':'position';squadSortAsc=false;}if(k==='season')squadSeason=el.value;if(k==='position')squadPos=el.value;if(k==='sort'){squadSort=el.value;squadSortAsc=false;}if(k==='detailed')squadStatsDetailed=el.checked;if(k==='available')squadAvailable=el.value==='fit';render();}
+ if(el.dataset.squadOption){const k=el.dataset.squadOption;if(k==='view'){squadView=el.value;squadSort=squadView==='stats'?'role':'position';squadSortAsc=false;}if(k==='season')squadSeason=el.value;if(k==='position')squadPos=el.value;if(k==='sort'){squadSort=el.value;squadSortAsc=false;}if(k==='detailed')squadStatsDetailed=el.checked;if(k==='available')squadAvailable=el.value==='fit';render();}
 });
 document.addEventListener('input',e=>{if(e.target.id==='squad-search'){squadQuery=e.target.value;$('#squad-table').innerHTML=squadTable();}});

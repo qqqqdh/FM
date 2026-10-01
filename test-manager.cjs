@@ -55,12 +55,12 @@ assert.equal(s.cupPlan.rotation,false,'batch must restore cup preference');
 // A bye recovers fitness/injuries without serving a match suspension or inventing a result.
 const bye=G.newGame(72,G.CLUBS.findIndex(c=>G.LEAGUES[c[4]].country==='KOREA'&&G.LEAGUES[c[4]].tier===2));
 assert.equal(G.nextFixture(bye),undefined);
-const resting=G.roster(bye)[0];resting.fitness=50;resting.injury=3;resting.banned=1;
+const resting=G.roster(bye)[0];resting.age=24;resting.fitness=50;resting.injury=3;resting.banned=1;
 const aiResting=bye.players.find(p=>p.club>0 && !bye.fixtures[0].some(pair=>pair.includes(p.club)));
-aiResting.fitness=50;aiResting.injury=3;
+aiResting.age=36;aiResting.fitness=50;aiResting.injury=3;
 assert(G.autoWeek(bye).rest);
-assert.equal(bye.clubs[0].played,0);assert.equal(resting.injury,2);assert.equal(resting.fitness,65);assert.equal(resting.banned,1);
-assert.equal(aiResting.injury,2);assert.equal(aiResting.fitness,65);
+assert.equal(bye.clubs[0].played,0);assert.equal(resting.injury,2);assert.equal(resting.fitness,54);assert.equal(resting.banned,1);
+assert.equal(aiResting.injury,2);assert.equal(aiResting.fitness,51,'older injured player rebuilds fitness more slowly');
 assert(G.nextFixture(bye));assert(!G.autoWeek(bye).rest);assert.equal(bye.clubs[0].played,1);
 // Phase targets and named plans persist, reject invalid inputs, and affect the model.
 const tactics=G.newGame(901), strengthBefore=G.strength(tactics,0);

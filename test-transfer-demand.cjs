@@ -69,7 +69,24 @@ async function ui(){
     // No fake filler bids and no empty negotiation form when all eligible clubs are full.
     await tab.evaluate(id=>{state.clubs.slice(1).forEach(c=>c.marketSpending={season:state.season,amount:100000});sellModal(id);},p.id);
     assert((await tab.locator('#modal').innerText()).includes('현재 조건에 맞는 관심 구단이 없습니다'));assert.equal(await tab.locator('#sell-form').count(),0);
-    assert.deepEqual(errors,[]);console.log('PASS: relevant offers, roster from bid/league/profile, player details, empty offers and mobile layout.');
+    const purchase=await tab.evaluate(()=>{
+      state=G.newGame(42);state.careerSelected=true;state.budget=10000;closeModal();render();
+      const club=state.clubs.find(c=>c.name==='대구 FC'),p=G.roster(state,club.id).find(p=>G.canRelease(state,p.id));
+      const base=G.clubMarketCapacity(state,club).budget;negotiate(p.id);
+      return {club:club.id,base,salary:G.wageDemand(state,p).salary};
+    });
+    await tab.locator('#bid-cash').fill('3900');
+    await tab.locator('#bid-salary').fill(String(purchase.salary));
+    await tab.locator('#deal-form [type=submit]').click();
+    await tab.evaluate(async()=>{await save();});
+    await tab.reload();await tab.waitForSelector('.nav-item');
+    await tab.evaluate(id=>clubRoster(id),purchase.club);
+    const accounting=await tab.locator('#modal .modal-desc').innerText();
+    assert(accounting.includes(`남은 시즌 영입 예산 ${(purchase.base+3900).toFixed(2)}억`));
+    assert(accounting.includes('이적 수입 3900.00억'));
+    assert(await tab.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+    await tab.locator('#modal').screenshot({path:'test-artifacts/transfer-income-mobile.png'});
+    assert.deepEqual(errors,[]);console.log('PASS: relevant offers, roster from bid/league/profile, 3900억 seller receipt, saved budget breakdown and mobile layout.');
   }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));}
 }
 (process.argv.includes('--ui')?ui():Promise.resolve().then(rules)).catch(e=>{console.error(e);process.exitCode=1;});
